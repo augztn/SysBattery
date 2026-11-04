@@ -184,7 +184,7 @@ class MainActivity : ComponentActivity() {
                 mutableStateOf(
                     prefs.safeString(
                         BatteryMonitorService.PREF_DRAIN_DISPLAY_MODE,
-                        BatteryMonitorService.DRAIN_MODE_BOTH
+                        BatteryMonitorService.METHOD_BOTH
                     )
                 )
             }
@@ -357,7 +357,10 @@ class MainActivity : ComponentActivity() {
                                             drainDisplayMode = nextMode
                                             prefs.edit().putString(BatteryMonitorService.PREF_DRAIN_DISPLAY_MODE, nextMode).apply()
                                             BatteryMonitorService.refresh(this@MainActivity)
-                                        }
+                                        },
+                                        prefs = prefs,
+                                        preferencesRevision = preferencesRevision,
+                                        onPreferencesChanged = { preferencesRevision++ }
                                     )
                                     1 -> AppUsageTab(
                                         usageAccessGranted = usageAccessGranted,

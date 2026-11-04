@@ -1,7 +1,9 @@
 package com.nlab.sysbattery.ui.screens
 
+import android.content.SharedPreferences
 import android.os.BatteryManager
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,18 +19,25 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nlab.sysbattery.data.BatterySysfsReader
+import com.nlab.sysbattery.data.safeBoolean
 import com.nlab.sysbattery.domain.BatteryStatsCalculator
 import com.nlab.sysbattery.service.BatteryMonitorService
 import com.nlab.sysbattery.ui.components.BatteryHeroCard
@@ -55,8 +64,14 @@ fun StatusTab(
     temperatureUnit: String,
     designCapacityMah: Double?,
     readingMethod: String,
-    onReadingMethodChange: (String) -> Unit
+    onReadingMethodChange: (String) -> Unit,
+    prefs: SharedPreferences,
+    preferencesRevision: Int,
+    onPreferencesChanged: () -> Unit
 ) {
+    var activeSubTab by rememberSaveable { mutableIntStateOf(0) }
+    val showChargingPower = prefs.safeBoolean("show_charging_power", true)
+
     val level = sample?.levelPercent
     val current = rates?.currentMilliAmpsMagnitude?.let { magnitude ->
         val signed = when (rates.direction) {
@@ -64,7 +79,19 @@ fun StatusTab(
             BatteryStatsCalculator.Direction.DISCHARGING -> -magnitude
             BatteryStatsCalculator.Direction.UNKNOWN -> magnitude
         }
-        String.format(Locale.getDefault(), "%+.0f mA", signed)
+        val baseCurrent = String.format(Locale.getDefault(), "%+.0f mA", signed)
+        if (rates.direction == BatteryStatsCalculator.Direction.CHARGING && showChargingPower) {
+            val watts = rates.powerWattsMagnitude
+            if (watts != null && watts > 0.05) {
+                String.format(Locale.getDefault(), "%s · %.1f W", baseCurrent, watts)
+            } else {
+                baseCurrent
+            }
+        } else if (rates.direction == BatteryStatsCalculator.Direction.CHARGING && !showChargingPower) {
+            "—"
+        } else {
+            baseCurrent
+        }
     } ?: "—"
 
     val temp = sample?.temperatureTenthsCelsius?.let {
@@ -142,6 +169,56 @@ fun StatusTab(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf("STATS" to 0, "OPTIONS" to 1).forEach { (title, idx) ->
+                    val selected = activeSubTab == idx
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { activeSubTab = idx }
+                            .padding(top = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            letterSpacing = 1.2.sp,
+                            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Box(
+                            modifier = Modifier
+                                .width(68.dp)
+                                .height(2.5.dp)
+                                .background(
+                                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface.copy(alpha = 0f),
+                                    RoundedCornerShape(2.dp)
+                                )
+                        )
+                    }
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        }
+
+        if (activeSubTab == 1) {
+            GlassCard {
+                BatteryMonitorOptionsList(
+                    prefs = prefs,
+                    preferencesRevision = preferencesRevision,
+                    onPreferencesChanged = onPreferencesChanged
+                )
+            }
+            return@Column
+        }
+
         BatteryHeroCard(
             level = level,
             direction = rates?.direction,
@@ -176,14 +253,12 @@ fun StatusTab(
             MetricCard(
                 title = "Current",
                 value = current,
-                symbol = "↯",
                 icon = SysBatteryIcons.ElectricBolt,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             MetricCard(
                 title = "Power",
                 value = power,
-                symbol = "W",
                 icon = SysBatteryIcons.FlashOn,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
@@ -198,14 +273,12 @@ fun StatusTab(
             MetricCard(
                 title = "Voltage",
                 value = voltage,
-                symbol = "V",
                 icon = SysBatteryIcons.VoltageWave,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             MetricCard(
                 title = drainRateCardTitle,
                 value = drainRateText,
-                symbol = "⌁",
                 icon = SysBatteryIcons.TrendingDown,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
@@ -222,14 +295,12 @@ fun StatusTab(
             MetricCard(
                 title = "Temperature",
                 value = temp,
-                symbol = "°",
                 icon = SysBatteryIcons.Thermostat,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             MetricCard(
                 title = "Health status",
                 value = health,
-                symbol = "♥",
                 icon = SysBatteryIcons.Favorite,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
@@ -244,14 +315,12 @@ fun StatusTab(
             MetricCard(
                 title = "Cycle count",
                 value = cycleCount,
-                symbol = "↻",
                 icon = SysBatteryIcons.Autorenew,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             MetricCard(
                 title = "Charge counter",
                 value = chargeCounterText,
-                symbol = "mAh",
                 icon = SysBatteryIcons.BatteryChargingFull,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
@@ -266,14 +335,12 @@ fun StatusTab(
             MetricCard(
                 title = "Full capacity",
                 value = fullCapacityText,
-                symbol = "mAh",
                 icon = SysBatteryIcons.BatteryFull,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             MetricCard(
                 title = "Health estimate",
                 value = healthEstimate,
-                symbol = "%",
                 icon = SysBatteryIcons.HealthAndSafety,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )

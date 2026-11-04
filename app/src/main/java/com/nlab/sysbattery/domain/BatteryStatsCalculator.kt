@@ -32,9 +32,8 @@ object BatteryStatsCalculator {
 
     private const val RATE_WINDOW_MS = 10 * 60 * 1000L
     private const val MIN_LEVEL_RATE_SPAN_MS = 3 * 60 * 1000L
-    private const val MIN_CURRENT_SAMPLES = 3
-    private const val MIN_CURRENT_SPAN_MS = 45 * 1000L
-    private const val MIN_SAMPLE_SPACING_MS = 15 * 1000L
+    private const val MIN_CURRENT_SPAN_MS = 15 * 1000L
+    private const val MIN_SAMPLE_SPACING_MS = 1_000L
     private const val MAX_RATE_SAMPLES = 60
     private const val MAX_PLAUSIBLE_CURRENT_MA = 15_000.0
     private const val MAX_PLAUSIBLE_RATE = 500.0

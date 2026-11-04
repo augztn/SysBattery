@@ -6,6 +6,7 @@ import android.content.SharedPreferences
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,12 +29,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -101,6 +104,17 @@ fun SettingsTab(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        BatteryMonitorSettingsCard(
+            prefs = prefs,
+            running = running,
+            onMonitorEnabledChange = onMonitorEnabledChange,
+            onThemeModeChange = onThemeModeChange,
+            drainDisplayMode = drainDisplayMode,
+            onDrainDisplayModeChange = onDrainDisplayModeChange,
+            onPreferencesChanged = onPreferencesChanged,
+            preferencesRevision = preferencesRevision
+        )
+
         GlassCard {
             CardSectionHeader(
                 icon = SysBatteryIcons.Settings,
@@ -143,17 +157,6 @@ fun SettingsTab(
                 style = MaterialTheme.typography.bodySmall
             )
         }
-
-        BatteryMonitorSettingsCard(
-            prefs = prefs,
-            running = running,
-            onMonitorEnabledChange = onMonitorEnabledChange,
-            onThemeModeChange = onThemeModeChange,
-            drainDisplayMode = drainDisplayMode,
-            onDrainDisplayModeChange = onDrainDisplayModeChange,
-            onPreferencesChanged = onPreferencesChanged,
-            preferencesRevision = preferencesRevision
-        )
 
         SettingsExpandableCard(
             title = "ADB Diagnostic Tools",
@@ -362,6 +365,359 @@ fun SettingsTab(
 }
 
 @Composable
+fun BatteryMonitorOptionsList(
+    prefs: SharedPreferences,
+    preferencesRevision: Int,
+    onPreferencesChanged: () -> Unit
+) {
+    val context = LocalContext.current
+
+    var resetAtThreshold by remember(preferencesRevision) {
+        mutableStateOf(prefs.safeBoolean("reset_at_threshold", true))
+    }
+    var threshold by remember(preferencesRevision) {
+        mutableFloatStateOf(prefs.safeFloat("reset_threshold_percent", 100f).coerceIn(50f, 100f))
+    }
+    var resetOnPlug by remember(preferencesRevision) {
+        mutableStateOf(prefs.safeBoolean("reset_on_plug", true))
+    }
+    var resetOnReboot by remember(preferencesRevision) {
+        mutableStateOf(prefs.safeBoolean("reset_on_reboot", true))
+    }
+    var idleWarning by remember(preferencesRevision) {
+        mutableStateOf(prefs.safeBoolean("idle_warning", true))
+    }
+    var warning by remember(preferencesRevision) {
+        mutableFloatStateOf(prefs.safeFloat("idle_warning_percent", 5f).coerceIn(1f, 20f))
+    }
+    var temperatureUnit by remember(preferencesRevision) {
+        mutableStateOf(prefs.safeString("temperature_unit", "Celsius (°C)"))
+    }
+    var showBatteryIcon by remember(preferencesRevision) {
+        mutableStateOf(prefs.safeBoolean("show_battery_icon", true))
+    }
+    var showChargingPower by remember(preferencesRevision) {
+        mutableStateOf(prefs.safeBoolean("show_charging_power", true))
+    }
+
+    var showThresholdDialog by remember { mutableStateOf(false) }
+    var showIdleWarningDialog by remember { mutableStateOf(false) }
+    var showTempUnitDialog by remember { mutableStateOf(false) }
+
+    fun saveBoolean(key: String, value: Boolean) {
+        prefs.edit().putBoolean(key, value).apply()
+        onPreferencesChanged()
+        BatteryMonitorService.refresh(context)
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        OptionToggleRow(
+            title = "Reset the stats when the battery reaches at or above a certain percentage",
+            checked = resetAtThreshold,
+            onCheckedChange = {
+                resetAtThreshold = it
+                prefs.edit()
+                    .putBoolean("reset_at_threshold", it)
+                    .putBoolean("threshold_reset_triggered", false)
+                    .apply()
+                onPreferencesChanged()
+                BatteryMonitorService.refresh(context)
+            }
+        )
+
+        OptionValueRow(
+            title = "Battery percentage for stats reset",
+            value = "${threshold.toInt()}%",
+            enabled = true,
+            onClick = { showThresholdDialog = true }
+        )
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+        OptionToggleRow(
+            title = "Reset the stats when the device is plugged in",
+            checked = resetOnPlug,
+            onCheckedChange = {
+                resetOnPlug = it
+                saveBoolean("reset_on_plug", it)
+            }
+        )
+
+        OptionToggleRow(
+            title = "Reset the stats when the device reboots or shuts down",
+            checked = resetOnReboot,
+            onCheckedChange = {
+                resetOnReboot = it
+                saveBoolean("reset_on_reboot", it)
+            }
+        )
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+        OptionToggleRow(
+            title = "Notify me if idle drain is higher than a certain percentage",
+            checked = idleWarning,
+            onCheckedChange = {
+                idleWarning = it
+                saveBoolean("idle_warning", it)
+            }
+        )
+
+        OptionValueRow(
+            title = "Idle drain percentage warning",
+            value = "${warning.toInt()}%",
+            enabled = true,
+            onClick = { showIdleWarningDialog = true }
+        )
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+        OptionValueRow(
+            title = "Battery temperature unit",
+            value = temperatureUnit,
+            enabled = true,
+            onClick = { showTempUnitDialog = true }
+        )
+
+        OptionToggleRow(
+            title = "Show battery % as a notification icon",
+            checked = showBatteryIcon,
+            onCheckedChange = {
+                showBatteryIcon = it
+                saveBoolean("show_battery_icon", it)
+            }
+        )
+
+        OptionToggleRow(
+            title = "Show charging amperage and wattage",
+            description = "Amperage and voltage depend on the charger and cable that you're using. These charging values can also be affected by your usage, device heat and/or battery temperature. This feature simply reads the values reported by the kernel.",
+            checked = showChargingPower,
+            onCheckedChange = {
+                showChargingPower = it
+                saveBoolean("show_charging_power", it)
+            }
+        )
+    }
+
+    if (showThresholdDialog) {
+        var tempThreshold by remember(threshold) { mutableFloatStateOf(threshold) }
+        AlertDialog(
+            onDismissRequest = { showThresholdDialog = false },
+            title = { Text("Battery percentage for stats reset") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "${tempThreshold.toInt()}%",
+                        fontFamily = JetBrainsMonoFamily,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Slider(
+                        value = tempThreshold,
+                        onValueChange = { tempThreshold = it },
+                        valueRange = 50f..100f,
+                        steps = 49
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(80, 90, 95, 100).forEach { preset ->
+                            FilterChip(
+                                selected = tempThreshold.toInt() == preset,
+                                onClick = { tempThreshold = preset.toFloat() },
+                                label = { Text("$preset%") }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        threshold = tempThreshold
+                        prefs.edit()
+                            .putInt("reset_threshold_percent", tempThreshold.toInt())
+                            .putBoolean("threshold_reset_triggered", false)
+                            .apply()
+                        showThresholdDialog = false
+                        onPreferencesChanged()
+                        BatteryMonitorService.refresh(context)
+                    }
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showThresholdDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showIdleWarningDialog) {
+        var tempWarning by remember(warning) { mutableFloatStateOf(warning) }
+        AlertDialog(
+            onDismissRequest = { showIdleWarningDialog = false },
+            title = { Text("Idle drain percentage warning") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "${tempWarning.toInt()}%",
+                        fontFamily = JetBrainsMonoFamily,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Slider(
+                        value = tempWarning,
+                        onValueChange = { tempWarning = it },
+                        valueRange = 1f..20f,
+                        steps = 18
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(2, 3, 5, 10).forEach { preset ->
+                            FilterChip(
+                                selected = tempWarning.toInt() == preset,
+                                onClick = { tempWarning = preset.toFloat() },
+                                label = { Text("$preset%") }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        warning = tempWarning
+                        prefs.edit().putInt("idle_warning_percent", tempWarning.toInt()).apply()
+                        showIdleWarningDialog = false
+                        onPreferencesChanged()
+                        BatteryMonitorService.refresh(context)
+                    }
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showIdleWarningDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showTempUnitDialog) {
+        val units = listOf("Celsius (°C)", "Fahrenheit (°F)")
+        AlertDialog(
+            onDismissRequest = { showTempUnitDialog = false },
+            title = { Text("Battery temperature unit") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    units.forEach { unit ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    temperatureUnit = unit
+                                    prefs.edit().putString("temperature_unit", unit).apply()
+                                    showTempUnitDialog = false
+                                    onPreferencesChanged()
+                                    BatteryMonitorService.refresh(context)
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = temperatureUnit == unit,
+                                onClick = {
+                                    temperatureUnit = unit
+                                    prefs.edit().putString("temperature_unit", unit).apply()
+                                    showTempUnitDialog = false
+                                    onPreferencesChanged()
+                                    BatteryMonitorService.refresh(context)
+                                }
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(text = unit, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTempUnitDialog = false }) { Text("Close") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun OptionToggleRow(
+    title: String,
+    description: String? = null,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 4.dp),
+        verticalAlignment = if (description != null) Alignment.Top else Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            if (description != null) {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun OptionValueRow(
+    title: String,
+    value: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
 private fun BatteryMonitorSettingsCard(
     prefs: SharedPreferences,
     running: Boolean,
@@ -376,154 +732,39 @@ private fun BatteryMonitorSettingsCard(
     var serviceEnabled by remember { mutableStateOf(running) }
     LaunchedEffect(running) { serviceEnabled = running }
 
-    var resetAtThreshold by remember { mutableStateOf(prefs.safeBoolean("reset_at_threshold", true)) }
-    var resetOnPlug by remember { mutableStateOf(prefs.safeBoolean("reset_on_plug", true)) }
-    var resetOnReboot by remember { mutableStateOf(prefs.safeBoolean("reset_on_reboot", true)) }
-    var idleWarning by remember { mutableStateOf(prefs.safeBoolean("idle_warning", true)) }
-    var showBatteryIcon by remember { mutableStateOf(prefs.safeBoolean("show_battery_icon", true)) }
-    var showChargingPower by remember { mutableStateOf(prefs.safeBoolean("show_charging_power", true)) }
     var designCapacityInput by remember(preferencesRevision) {
         mutableStateOf(prefs.safeInt("design_capacity_mah", 0).takeIf { it > 0 }?.toString() ?: "")
     }
-
-    var threshold by remember {
-        mutableFloatStateOf(prefs.safeFloat("reset_threshold_percent", 90f).coerceIn(50f, 100f))
-    }
-
-    var warning by remember {
-        mutableFloatStateOf(prefs.safeFloat("idle_warning_percent", 5f).coerceIn(1f, 20f))
-    }
-
-    var temperatureUnit by remember(preferencesRevision) {
-        mutableStateOf(prefs.safeString("temperature_unit", "Celsius (°C)"))
-    }
-
     var theme by remember(preferencesRevision) {
         mutableStateOf(prefs.safeString("theme_mode", "System default"))
     }
-
     var showResetConfirmation by remember { mutableStateOf(false) }
-
-    fun saveBoolean(key: String, value: Boolean) {
-        prefs.edit().putBoolean(key, value).apply()
-        BatteryMonitorService.refresh(context)
-    }
 
     GlassCard {
         CardSectionHeader(
             icon = SysBatteryIcons.NotificationsActive,
-            title = "Monitor & Reset Preferences",
-            subtitle = "Configure session resets, alerts, and notification style"
+            title = "Battery Monitor Options",
+            subtitle = "Session resets, idle drain alerts, and notification options"
         )
 
-        SettingToggleRow(
+        OptionToggleRow(
             title = "Battery monitor service",
             description = "Keep collecting telemetry while the app is in the background.",
-            checked = serviceEnabled
-        ) {
-            serviceEnabled = it
-            saveBoolean("monitor_enabled", it)
-            onMonitorEnabledChange(it)
-        }
-
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
-
-        SettingToggleRow(
-            title = "Reset stats at threshold",
-            description = "Reset session counters when charging reaches threshold.",
-            checked = resetAtThreshold
-        ) {
-            resetAtThreshold = it
-            saveBoolean("reset_at_threshold", it)
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Reset Threshold",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = "${threshold.toInt()}%",
-                fontFamily = JetBrainsMonoFamily,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-        Slider(
-            value = threshold,
-            onValueChange = { threshold = it },
-            valueRange = 50f..100f,
-            steps = 9,
-            onValueChangeFinished = {
-                prefs.edit().putInt("reset_threshold_percent", threshold.toInt()).apply()
+            checked = serviceEnabled,
+            onCheckedChange = {
+                serviceEnabled = it
+                prefs.edit().putBoolean("monitor_enabled", it).apply()
                 BatteryMonitorService.refresh(context)
-            },
-            enabled = resetAtThreshold
+                onMonitorEnabledChange(it)
+            }
         )
 
-        SettingToggleRow(
-            title = "Reset when plugged in",
-            description = "Start a fresh session when charging starts.",
-            checked = resetOnPlug
-        ) {
-            resetOnPlug = it
-            saveBoolean("reset_on_plug", it)
-        }
-
-        SettingToggleRow(
-            title = "Reset on reboot",
-            description = "Keep telemetry sessions separated by device restarts.",
-            checked = resetOnReboot
-        ) {
-            resetOnReboot = it
-            saveBoolean("reset_on_reboot", it)
-        }
-
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
 
-        SettingToggleRow(
-            title = "High idle drain warning",
-            description = "Show notification alert if screen-off drain exceeds limit.",
-            checked = idleWarning
-        ) {
-            idleWarning = it
-            saveBoolean("idle_warning", it)
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Idle Drain Limit",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = "${warning.toInt()}%/hr",
-                fontFamily = JetBrainsMonoFamily,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-        Slider(
-            value = warning,
-            onValueChange = { warning = it },
-            valueRange = 1f..20f,
-            steps = 18,
-            onValueChangeFinished = {
-                prefs.edit().putInt("idle_warning_percent", warning.toInt()).apply()
-                BatteryMonitorService.refresh(context)
-            },
-            enabled = idleWarning
+        BatteryMonitorOptionsList(
+            prefs = prefs,
+            preferencesRevision = preferencesRevision,
+            onPreferencesChanged = onPreferencesChanged
         )
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
@@ -581,16 +822,11 @@ private fun BatteryMonitorSettingsCard(
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
 
         Text("Dashboard Drain Display", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        Text(
-            text = "Choose how active and idle drain are emphasized on the dashboard.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
         SegmentedControlRow(
             options = listOf(
-                BatteryMonitorService.DRAIN_MODE_BOTH to "Both",
-                BatteryMonitorService.DRAIN_MODE_ELAPSED to "Time (%)",
-                BatteryMonitorService.DRAIN_MODE_RATE to "%/hr"
+                BatteryMonitorService.METHOD_BOTH to "Both",
+                BatteryMonitorService.METHOD_TIME_DROP to "Time (%)",
+                BatteryMonitorService.METHOD_RATE_ONLY to "%/hr"
             ),
             selectedValue = drainDisplayMode,
             onSelect = { modeValue ->
@@ -600,22 +836,6 @@ private fun BatteryMonitorSettingsCard(
                 BatteryMonitorService.refresh(context)
             },
             testTagPrefix = "settings_drain_mode"
-        )
-
-        Text("Temperature Unit", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        SegmentedControlRow(
-            options = listOf(
-                "Celsius (°C)" to "Celsius (°C)",
-                "Fahrenheit (°F)" to "Fahrenheit (°F)"
-            ),
-            selectedValue = temperatureUnit,
-            onSelect = { unit ->
-                temperatureUnit = unit
-                prefs.edit().putString("temperature_unit", unit).apply()
-                onPreferencesChanged()
-                BatteryMonitorService.refresh(context)
-            },
-            testTagPrefix = "settings_temp_unit"
         )
 
         Text("Theme Mode", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
@@ -634,24 +854,6 @@ private fun BatteryMonitorSettingsCard(
             },
             testTagPrefix = "settings_theme_mode"
         )
-
-        SettingToggleRow(
-            title = "Percentage in notification",
-            description = "Show battery percentage in the ongoing notification.",
-            checked = showBatteryIcon
-        ) {
-            showBatteryIcon = it
-            saveBoolean("show_battery_icon", it)
-        }
-
-        SettingToggleRow(
-            title = "Amperage in notification",
-            description = "Show live current (mA) in the ongoing notification.",
-            checked = showChargingPower
-        ) {
-            showChargingPower = it
-            saveBoolean("show_charging_power", it)
-        }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
 
@@ -683,30 +885,6 @@ private fun BatteryMonitorSettingsCard(
                 dismissButton = { TextButton(onClick = { showResetConfirmation = false }) { Text("Cancel") } }
             )
         }
-    }
-}
-
-@Composable
-private fun SettingToggleRow(
-    title: String,
-    description: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(end = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

@@ -14,9 +14,9 @@ import kotlin.math.max
 class BatterySessionDbHelper private constructor(context: Context) :
     SQLiteOpenHelper(context.applicationContext, DATABASE_NAME, null, DATABASE_VERSION) {
 
-    enum class SessionType(val dbValue: String, val displayLabel: String) {
-        ACTIVE("ACTIVE", "Active"),
-        IDLE("IDLE", "Idle");
+    enum class SessionType(val dbValue: String) {
+        ACTIVE("ACTIVE"),
+        IDLE("IDLE");
 
         companion object {
             fun fromDb(value: String?): SessionType =
@@ -29,10 +29,8 @@ class BatterySessionDbHelper private constructor(context: Context) :
         val sessionType: SessionType,
         val startTimestampElapsedMs: Long,
         val endTimestampElapsedMs: Long,
-        val recordedEpochMs: Long,
         val startBatteryLevel: Int,
         val endBatteryLevel: Int,
-        val dropPercent: Double,
         val calculatedRatePerHour: Double
     ) {
         val durationMillis: Long
@@ -54,8 +52,7 @@ class BatterySessionDbHelper private constructor(context: Context) :
 
     data class RollingAggregate(
         val totalDropPercent: Double = 0.0,
-        val totalDurationMillis: Long = 0L,
-        val sessionCount: Int = 0
+        val totalDurationMillis: Long = 0L
     )
 
     data class Rolling24hSummary(
@@ -159,10 +156,8 @@ class BatterySessionDbHelper private constructor(context: Context) :
         val cutoffEpochMs = nowEpochMs - WINDOW_24_HOURS_MS
         var activeDrop = 0.0
         var activeDuration = 0L
-        var activeCount = 0
         var idleDrop = 0.0
         var idleDuration = 0L
-        var idleCount = 0
         val recent = mutableListOf<SessionRecord>()
 
         runCatching {
@@ -171,8 +166,7 @@ class BatterySessionDbHelper private constructor(context: Context) :
                 """
                 SELECT $COL_SESSION_TYPE,
                        SUM($COL_DROP_PERCENT),
-                       SUM($COL_END_TS - $COL_START_TS),
-                       COUNT(*)
+                       SUM($COL_END_TS - $COL_START_TS)
                 FROM $TABLE_SESSIONS
                 WHERE $COL_RECORDED_EPOCH >= ?
                 GROUP BY $COL_SESSION_TYPE
@@ -183,15 +177,12 @@ class BatterySessionDbHelper private constructor(context: Context) :
                     val type = SessionType.fromDb(cursor.getString(0))
                     val drop = cursor.getDouble(1).coerceAtLeast(0.0)
                     val duration = cursor.getLong(2).coerceAtLeast(0L)
-                    val count = cursor.getInt(3)
                     if (type == SessionType.ACTIVE) {
                         activeDrop = drop
                         activeDuration = duration
-                        activeCount = count
                     } else {
                         idleDrop = drop
                         idleDuration = duration
-                        idleCount = count
                     }
                 }
             }
@@ -210,10 +201,8 @@ class BatterySessionDbHelper private constructor(context: Context) :
                 val typeIdx = cursor.getColumnIndexOrThrow(COL_SESSION_TYPE)
                 val startTsIdx = cursor.getColumnIndexOrThrow(COL_START_TS)
                 val endTsIdx = cursor.getColumnIndexOrThrow(COL_END_TS)
-                val epochIdx = cursor.getColumnIndexOrThrow(COL_RECORDED_EPOCH)
                 val startLvlIdx = cursor.getColumnIndexOrThrow(COL_START_LEVEL)
                 val endLvlIdx = cursor.getColumnIndexOrThrow(COL_END_LEVEL)
-                val dropIdx = cursor.getColumnIndexOrThrow(COL_DROP_PERCENT)
                 val rateIdx = cursor.getColumnIndexOrThrow(COL_RATE_PER_HOUR)
 
                 while (cursor.moveToNext()) {
@@ -223,10 +212,8 @@ class BatterySessionDbHelper private constructor(context: Context) :
                             sessionType = SessionType.fromDb(cursor.getString(typeIdx)),
                             startTimestampElapsedMs = cursor.getLong(startTsIdx),
                             endTimestampElapsedMs = cursor.getLong(endTsIdx),
-                            recordedEpochMs = cursor.getLong(epochIdx),
                             startBatteryLevel = cursor.getInt(startLvlIdx),
                             endBatteryLevel = cursor.getInt(endLvlIdx),
-                            dropPercent = cursor.getDouble(dropIdx),
                             calculatedRatePerHour = cursor.getDouble(rateIdx)
                         )
                     )
@@ -237,8 +224,8 @@ class BatterySessionDbHelper private constructor(context: Context) :
         }
 
         return Rolling24hSummary(
-            active = RollingAggregate(activeDrop, activeDuration, activeCount),
-            idle = RollingAggregate(idleDrop, idleDuration, idleCount),
+            active = RollingAggregate(activeDrop, activeDuration),
+            idle = RollingAggregate(idleDrop, idleDuration),
             recentSessions = recent
         )
     }

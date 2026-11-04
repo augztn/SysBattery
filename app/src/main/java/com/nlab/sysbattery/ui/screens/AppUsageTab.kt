@@ -32,6 +32,8 @@ import com.nlab.sysbattery.ui.components.CardSectionHeader
 import com.nlab.sysbattery.ui.components.GlassCard
 import com.nlab.sysbattery.ui.components.SysBatteryIcons
 import com.nlab.sysbattery.ui.theme.JetBrainsMonoFamily
+import com.nlab.sysbattery.ui.theme.LocalLiquidTheme
+import com.nlab.sysbattery.ui.theme.liquidBorderBrush
 import java.util.Locale
 
 @Composable
@@ -43,6 +45,7 @@ fun AppUsageTab(
     advancedReport: AdvancedBatteryStatsReader.Report?,
     advancedError: String?
 ) {
+    val isLiquid = LocalLiquidTheme.current
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -145,9 +148,13 @@ fun AppUsageTab(
                 if (report.usage.isEmpty()) {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                        border = if (isLiquid) {
+                            BorderStroke(1.dp, liquidBorderBrush(0.7f))
+                        } else {
+                            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                        }
                     ) {
                         Text(
                             text = if (!usageAccessGranted) "Enable Usage Access above to inspect foreground time."
@@ -166,9 +173,13 @@ fun AppUsageTab(
                             val minutes = app.foregroundMillis / 60_000L
                             val fraction = (app.foregroundMillis.toFloat() / maxForeground).coerceIn(0f, 1f)
                             Surface(
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
                                 color = MaterialTheme.colorScheme.surfaceContainerLow,
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                                border = if (isLiquid) {
+                                    BorderStroke(1.dp, liquidBorderBrush(0.75f))
+                                } else {
+                                    BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                                }
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -234,9 +245,13 @@ fun AppUsageTab(
                 )
 
                 Surface(
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                    border = if (isLiquid) {
+                        BorderStroke(1.dp, liquidBorderBrush(0.75f))
+                    } else {
+                        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                    }
                 ) {
                     Column(
                         modifier = Modifier
@@ -245,20 +260,17 @@ fun AppUsageTab(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = report.totalConsumedMah?.let { String.format(Locale.getDefault(), "%.1f mAh", it) }
-                                ?: "Privileged API Restricted",
+                            text = "Privileged API Restricted",
                             fontFamily = JetBrainsMonoFamily,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
-                        report.batteryStatsError?.let {
-                            Text(
-                                text = it,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
+                        Text(
+                            text = report.batteryStatsNotice,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
             }

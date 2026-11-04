@@ -461,31 +461,6 @@ object SysBatteryIcons {
         }
     }
 
-    val Speed: ImageVector by lazy {
-        vector("Speed") {
-            path(fill = SolidColor(Color.Black)) {
-                moveTo(20.38f, 8.57f)
-                lineToRelative(-1.23f, 1.85f)
-                arcToRelative(8f, 8f, 0f, false, true, -0.22f, 7.58f)
-                horizontalLineTo(5.07f)
-                arcTo(8f, 8f, 0f, false, true, 15.58f, 6.85f)
-                lineToRelative(1.85f, -1.23f)
-                arcTo(10f, 10f, 0f, false, false, 3.35f, 19f)
-                arcToRelative(2f, 2f, 0f, false, false, 1.72f, 1f)
-                horizontalLineToRelative(13.85f)
-                arcToRelative(2f, 2f, 0f, false, false, 1.74f, -1f)
-                arcToRelative(10f, 10f, 0f, false, false, -0.27f, -10.44f)
-                close()
-                moveTo(10.59f, 15.41f)
-                arcToRelative(2f, 2f, 0f, false, false, 2.83f, 0f)
-                lineToRelative(5.66f, -8.49f)
-                lineToRelative(-8.49f, 5.66f)
-                arcToRelative(2f, 2f, 0f, false, false, 0f, 2.83f)
-                close()
-            }
-        }
-    }
-
     val Favorite: ImageVector by lazy {
         vector("Favorite") {
             path(fill = SolidColor(Color.Black)) {
@@ -961,6 +936,28 @@ object SysBatteryIcons {
                 lineToRelative(7.59f, -7.59f)
                 lineTo(19f, 8f)
                 lineToRelative(-9f, 9f)
+                close()
+            }
+        }
+    }
+
+    val LiquidDrop: ImageVector by lazy {
+        vector("LiquidDrop") {
+            path(fill = SolidColor(Color.Black)) {
+                moveTo(12f, 2.5f)
+                curveTo(12f, 2.5f, 5.5f, 9.8f, 5.5f, 14.5f)
+                curveTo(5.5f, 18.09f, 8.41f, 21f, 12f, 21f)
+                reflectiveCurveTo(18.5f, 18.09f, 18.5f, 14.5f)
+                curveTo(18.5f, 9.8f, 12f, 2.5f, 12f, 2.5f)
+                close()
+                // Inner specular droplet highlight
+                moveTo(9.8f, 17.2f)
+                curveToRelative(-1.3f, -0.7f, -2.1f, -2.0f, -2.1f, -3.5f)
+                curveToRelative(0f, -0.45f, 0.35f, -0.8f, 0.8f, -0.8f)
+                reflectiveCurveToRelative(0.8f, 0.35f, 0.8f, 0.8f)
+                curveToRelative(0f, 0.9f, 0.45f, 1.7f, 1.25f, 2.15f)
+                curveToRelative(0.4f, 0.22f, 0.55f, 0.72f, 0.32f, 1.1f)
+                curveToRelative(-0.22f, 0.38f, -0.68f, 0.48f, -1.07f, 0.25f)
                 close()
             }
         }

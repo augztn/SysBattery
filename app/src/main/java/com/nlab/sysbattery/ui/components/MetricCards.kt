@@ -1,6 +1,11 @@
 package com.nlab.sysbattery.ui.components
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -39,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -49,25 +55,70 @@ import androidx.compose.ui.unit.sp
 import com.nlab.sysbattery.domain.BatteryStatsCalculator
 import com.nlab.sysbattery.service.BatteryMonitorService
 import com.nlab.sysbattery.ui.theme.JetBrainsMonoFamily
+import com.nlab.sysbattery.ui.theme.LocalLiquidTheme
+import com.nlab.sysbattery.ui.theme.liquidBorderBrush
+import com.nlab.sysbattery.ui.theme.liquidSurfaceBrush
 import java.util.Locale
+import kotlin.math.sin
 
 @Composable
 fun GlassCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val isLiquid = LocalLiquidTheme.current
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        colors = CardDefaults.cardColors(
+            containerColor = if (isLiquid) {
+                Color(0xFF0A182B).copy(alpha = 0.56f)
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            }
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isLiquid) 0.dp else 1.dp),
+        border = if (isLiquid) {
+            BorderStroke(1.2.dp, liquidBorderBrush())
+        } else {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        }
     ) {
-        Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            content = content
-        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (isLiquid) {
+                        Modifier.background(liquidSurfaceBrush())
+                    } else {
+                        Modifier
+                    }
+                )
+        ) {
+            if (isLiquid) {
+                // Specular top-edge highlight line
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.55f),
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                )
+            }
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                content = content
+            )
+        }
     }
 }
 
@@ -79,6 +130,7 @@ fun CardSectionHeader(
     modifier: Modifier = Modifier,
     trailingContent: (@Composable () -> Unit)? = null
 ) {
+    val isLiquid = LocalLiquidTheme.current
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -90,9 +142,17 @@ fun CardSectionHeader(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.32f)),
+                shape = RoundedCornerShape(if (isLiquid) 14.dp else 12.dp),
+                color = if (isLiquid) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                } else {
+                    MaterialTheme.colorScheme.primaryContainer
+                },
+                border = if (isLiquid) {
+                    BorderStroke(1.dp, liquidBorderBrush(0.9f))
+                } else {
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.32f))
+                },
                 modifier = Modifier.size(40.dp)
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
@@ -144,11 +204,20 @@ fun SegmentedControlRow(
     modifier: Modifier = Modifier,
     testTagPrefix: String = "segment"
 ) {
+    val isLiquid = LocalLiquidTheme.current
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+        shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
+        color = if (isLiquid) {
+            Color(0xFF071324).copy(alpha = 0.62f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainer
+        },
+        border = if (isLiquid) {
+            BorderStroke(1.dp, liquidBorderBrush(0.75f))
+        } else {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+        }
     ) {
         Row(
             modifier = Modifier
@@ -159,22 +228,25 @@ fun SegmentedControlRow(
         ) {
             options.forEach { (value, label) ->
                 val selected = selectedValue == value
+                val itemShape = RoundedCornerShape(if (isLiquid) 12.dp else 10.dp)
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
+                    shape = itemShape,
                     color = if (selected) {
-                        MaterialTheme.colorScheme.primaryContainer
+                        if (isLiquid) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                        else MaterialTheme.colorScheme.primaryContainer
                     } else {
                         Color.Transparent
                     },
                     border = if (selected) {
-                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                        if (isLiquid) BorderStroke(1.dp, liquidBorderBrush())
+                        else BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
                     } else {
                         null
                     },
                     modifier = Modifier
                         .weight(1f)
                         .height(36.dp)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(itemShape)
                         .clickable { onSelect(value) }
                         .testTag("${testTagPrefix}_${label.lowercase(Locale.ROOT).replace(" ", "_")}")
                 ) {
@@ -182,14 +254,15 @@ fun SegmentedControlRow(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 8.dp)
+                            .padding(horizontal = 6.dp)
                     ) {
                         Text(
                             text = label,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                             color = if (selected) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
+                                if (isLiquid) MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onPrimaryContainer
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             },
@@ -213,11 +286,23 @@ fun BatteryHeroCard(
     voltage: String,
     health: String
 ) {
+    val isLiquid = LocalLiquidTheme.current
     val isCharging = direction == BatteryStatsCalculator.Direction.CHARGING
     val animatedProgress by animateFloatAsState(
         targetValue = ((level ?: 0).coerceIn(0, 100)) / 100f,
         animationSpec = tween(durationMillis = 650),
         label = "hero_level_progress"
+    )
+
+    val waveTransition = rememberInfiniteTransition(label = "hero_liquid_wave")
+    val wavePhase by waveTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2.0 * Math.PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 3600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "hero_wave_phase"
     )
 
     Card(
@@ -226,24 +311,62 @@ fun BatteryHeroCard(
             .testTag("battery_hero_card"),
         shape = MaterialTheme.shapes.extraLarge,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            containerColor = if (isLiquid) {
+                Color(0xFF08172A).copy(alpha = 0.62f)
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            }
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f))
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isLiquid) 0.dp else 2.dp),
+        border = if (isLiquid) {
+            BorderStroke(1.4.dp, liquidBorderBrush())
+        } else {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f))
+        }
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.36f),
-                            MaterialTheme.colorScheme.surfaceContainerLow,
-                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.20f)
+                    if (isLiquid) {
+                        Brush.linearGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.16f),
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                                Color(0xFF071527).copy(alpha = 0.45f),
+                                MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f)
+                            )
                         )
-                    )
+                    } else {
+                        Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.36f),
+                                MaterialTheme.colorScheme.surfaceContainerLow,
+                                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.20f)
+                            )
+                        )
+                    }
                 )
         ) {
+            if (isLiquid) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.5.dp)
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.68f),
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.58f),
+                                    MaterialTheme.colorScheme.secondary.copy(alpha = 0.48f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                )
+            }
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -264,13 +387,13 @@ fun BatteryHeroCard(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Icon(
-                                imageVector = SysBatteryIcons.Bolt,
+                                imageVector = if (isLiquid) SysBatteryIcons.LiquidDrop else SysBatteryIcons.Bolt,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
-                                text = "BATTERY LEVEL",
+                                text = if (isLiquid) "LIQUID CELL TELEMETRY" else "BATTERY LEVEL",
                                 color = MaterialTheme.colorScheme.primary,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
@@ -307,14 +430,20 @@ fun BatteryHeroCard(
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (isCharging) {
                                     MaterialTheme.colorScheme.primaryContainer
+                                } else if (isLiquid) {
+                                    Color.White.copy(alpha = 0.08f)
                                 } else {
                                     MaterialTheme.colorScheme.surfaceContainerHigh
                                 },
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (isCharging) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
-                                    else MaterialTheme.colorScheme.outlineVariant
-                                )
+                                border = if (isLiquid) {
+                                    BorderStroke(1.dp, liquidBorderBrush(0.8f))
+                                } else {
+                                    BorderStroke(
+                                        1.dp,
+                                        if (isCharging) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                                        else MaterialTheme.colorScheme.outlineVariant
+                                    )
+                                }
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -345,8 +474,16 @@ fun BatteryHeroCard(
                             if (current != "—") {
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
-                                    color = MaterialTheme.colorScheme.surfaceContainer,
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                                    color = if (isLiquid) {
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainer
+                                    },
+                                    border = if (isLiquid) {
+                                        BorderStroke(1.dp, liquidBorderBrush(0.85f))
+                                    } else {
+                                        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                                    }
                                 ) {
                                     Box(
                                         contentAlignment = Alignment.Center,
@@ -370,7 +507,11 @@ fun BatteryHeroCard(
                     Box(contentAlignment = Alignment.Center, modifier = Modifier.size(110.dp)) {
                         val primaryColor = MaterialTheme.colorScheme.primary
                         val secondaryColor = MaterialTheme.colorScheme.secondary
-                        val trackColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.65f)
+                        val trackColor = if (isLiquid) {
+                            Color.White.copy(alpha = 0.14f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.65f)
+                        }
                         Canvas(modifier = Modifier.fillMaxSize().padding(8.dp)) {
                             drawArc(
                                 color = trackColor,
@@ -390,10 +531,98 @@ fun BatteryHeroCard(
                                     style = Stroke(width = 11.dp.toPx(), cap = StrokeCap.Round)
                                 )
                             }
+
+                            if (isLiquid) {
+                                // Inner liquid wave orb inside the gauge ring
+                                val orbRadius = size.minDimension * 0.31f
+                                val centerOffset = Offset(size.width / 2f, size.height / 2f)
+                                val circleClip = Path().apply {
+                                    addOval(
+                                        androidx.compose.ui.geometry.Rect(
+                                            center = centerOffset,
+                                            radius = orbRadius
+                                        )
+                                    )
+                                }
+                                clipPath(circleClip) {
+                                    drawCircle(
+                                        color = Color(0xFF061322).copy(alpha = 0.78f),
+                                        radius = orbRadius,
+                                        center = centerOffset
+                                    )
+                                    val orbTop = centerOffset.y - orbRadius
+                                    val orbBottom = centerOffset.y + orbRadius
+                                    val waterY = orbBottom - (orbRadius * 2f * animatedProgress.coerceIn(0.08f, 0.94f))
+                                    val waveAmp = 3.5.dp.toPx()
+
+                                    // Back cyan wave
+                                    val backWave = Path().apply {
+                                        val left = centerOffset.x - orbRadius
+                                        val right = centerOffset.x + orbRadius
+                                        moveTo(left, orbBottom)
+                                        val steps = 20
+                                        for (i in 0..steps) {
+                                            val t = i.toFloat() / steps
+                                            val x = left + (right - left) * t
+                                            val y = waterY + sin(t * 2f * Math.PI.toFloat() - wavePhase) * waveAmp
+                                            lineTo(x, y)
+                                        }
+                                        lineTo(right, orbBottom)
+                                        close()
+                                    }
+                                    drawPath(
+                                        path = backWave,
+                                        color = secondaryColor.copy(alpha = 0.35f)
+                                    )
+
+                                    // Front emerald-cyan gradient wave
+                                    val frontWave = Path().apply {
+                                        val left = centerOffset.x - orbRadius
+                                        val right = centerOffset.x + orbRadius
+                                        moveTo(left, orbBottom)
+                                        val steps = 20
+                                        for (i in 0..steps) {
+                                            val t = i.toFloat() / steps
+                                            val x = left + (right - left) * t
+                                            val y = waterY + sin(t * 2f * Math.PI.toFloat() + wavePhase) * waveAmp
+                                            lineTo(x, y)
+                                        }
+                                        lineTo(right, orbBottom)
+                                        close()
+                                    }
+                                    drawPath(
+                                        path = frontWave,
+                                        brush = Brush.verticalGradient(
+                                            colors = listOf(
+                                                primaryColor.copy(alpha = 0.62f),
+                                                secondaryColor.copy(alpha = 0.42f)
+                                            ),
+                                            startY = orbTop,
+                                            endY = orbBottom
+                                        )
+                                    )
+                                }
+                                drawCircle(
+                                    brush = Brush.linearGradient(
+                                        colors = listOf(
+                                            Color.White.copy(alpha = 0.55f),
+                                            primaryColor.copy(alpha = 0.35f),
+                                            secondaryColor.copy(alpha = 0.25f)
+                                        )
+                                    ),
+                                    radius = orbRadius,
+                                    center = centerOffset,
+                                    style = Stroke(width = 1.2.dp.toPx())
+                                )
+                            }
                         }
                         Surface(
                             shape = CircleShape,
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                            color = if (isLiquid) {
+                                Color.Transparent
+                            } else {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                            },
                             modifier = Modifier.size(54.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
@@ -401,14 +630,20 @@ fun BatteryHeroCard(
                                     imageVector = if (isCharging) SysBatteryIcons.ElectricBolt else SysBatteryIcons.BrandLogo,
                                     contentDescription = null,
                                     modifier = Modifier.size(26.dp),
-                                    tint = MaterialTheme.colorScheme.primary
+                                    tint = if (isLiquid) Color.White else MaterialTheme.colorScheme.primary
                                 )
                             }
                         }
                     }
                 }
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+                HorizontalDivider(
+                    color = if (isLiquid) {
+                        Color.White.copy(alpha = 0.16f)
+                    } else {
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
+                    }
+                )
 
                 Row(
                     modifier = Modifier
@@ -447,11 +682,20 @@ fun QuickMetricPill(
     value: String,
     modifier: Modifier = Modifier
 ) {
+    val isLiquid = LocalLiquidTheme.current
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+        shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
+        color = if (isLiquid) {
+            Color(0xFF0A1B30).copy(alpha = 0.55f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f)
+        },
+        border = if (isLiquid) {
+            BorderStroke(1.dp, liquidBorderBrush(0.75f))
+        } else {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+        }
     ) {
         Column(
             modifier = Modifier
@@ -566,11 +810,20 @@ fun TelemetrySessionCard(
         }
 
         // Deep Sleep vs Awake (Screen-Off Isolated CPU Efficiency Ratio)
+        val isLiquid = LocalLiquidTheme.current
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+            shape = RoundedCornerShape(if (isLiquid) 18.dp else 16.dp),
+            color = if (isLiquid) {
+                Color(0xFF081628).copy(alpha = 0.56f)
+            } else {
+                MaterialTheme.colorScheme.surfaceContainer
+            },
+            border = if (isLiquid) {
+                BorderStroke(1.dp, liquidBorderBrush(0.75f))
+            } else {
+                BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+            }
         ) {
             Column(
                 modifier = Modifier.padding(14.dp),
@@ -582,14 +835,14 @@ fun TelemetrySessionCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "IDLE SLEEP EFFICIENCY",
+                        text = "IDLE SLEEP & AWAKE",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.6.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "Share of screen-off time",
+                        text = String.format(Locale.getDefault(), "Sleep %.0f%% · Awake %.0f%%", session.deepSleepShare, session.awakeShare),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -641,7 +894,7 @@ fun TelemetrySessionCard(
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
-                                text = "Awake (screen off)",
+                                text = "Awake",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -701,11 +954,20 @@ private fun DrainMetricTile(
     subtitle: String,
     modifier: Modifier = Modifier
 ) {
+    val isLiquid = LocalLiquidTheme.current
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        shape = RoundedCornerShape(if (isLiquid) 18.dp else 16.dp),
+        color = if (isLiquid) {
+            Color(0xFF081628).copy(alpha = 0.56f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainer
+        },
+        border = if (isLiquid) {
+            BorderStroke(1.dp, liquidBorderBrush(0.75f))
+        } else {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        }
     ) {
         Column(
             modifier = Modifier
@@ -906,74 +1168,93 @@ fun BatteryHistoryCard(batteryHistory: List<Pair<Long, Int>>, currentLevel: Int?
 fun MetricCard(
     title: String,
     value: String,
-    symbol: String,
-    icon: ImageVector? = null,
+    icon: ImageVector,
     modifier: Modifier = Modifier
 ) {
+    val isLiquid = LocalLiquidTheme.current
     Surface(
         modifier = modifier,
         shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        color = if (isLiquid) {
+            Color(0xFF0A182B).copy(alpha = 0.56f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
+        border = if (isLiquid) {
+            BorderStroke(1.1.dp, liquidBorderBrush(0.85f))
+        } else {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        }
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = title.uppercase(Locale.ROOT),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.6.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(end = 8.dp)
+                .then(
+                    if (isLiquid) {
+                        Modifier.background(liquidSurfaceBrush())
+                    } else {
+                        Modifier
+                    }
                 )
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
-                    modifier = Modifier.size(32.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                        if (icon != null) {
+                    Text(
+                        text = title.uppercase(Locale.ROOT),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.6.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp)
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(if (isLiquid) 12.dp else 10.dp),
+                        color = if (isLiquid) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                        } else {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f)
+                        },
+                        border = if (isLiquid) {
+                            BorderStroke(1.dp, liquidBorderBrush(0.8f))
+                        } else {
+                            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f))
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                             Icon(
                                 imageVector = icon,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp),
                                 tint = MaterialTheme.colorScheme.primary
                             )
-                        } else {
-                            Text(
-                                text = symbol,
-                                color = MaterialTheme.colorScheme.primary,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
-                            )
                         }
                     }
                 }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = value,
+                    fontFamily = JetBrainsMonoFamily,
+                    style = if (value.length > 13) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
-            Spacer(Modifier.height(12.dp))
-            Text(
-                text = value,
-                fontFamily = JetBrainsMonoFamily,
-                style = if (value.length > 13) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
         }
     }
 }
@@ -982,6 +1263,7 @@ fun MetricCard(
 fun SessionHistoryCard(
     session: BatteryMonitorService.SessionTelemetry
 ) {
+    val isLiquid = LocalLiquidTheme.current
     GlassCard(modifier = Modifier.testTag("session_history_card")) {
         CardSectionHeader(
             icon = SysBatteryIcons.Timeline,
@@ -1019,9 +1301,17 @@ fun SessionHistoryCard(
         // Current Open Session Marker
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+            shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
+            color = if (isLiquid) {
+                Color(0xFF081628).copy(alpha = 0.56f)
+            } else {
+                MaterialTheme.colorScheme.surfaceContainer
+            },
+            border = if (isLiquid) {
+                BorderStroke(1.dp, liquidBorderBrush(0.75f))
+            } else {
+                BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+            }
         ) {
             Row(
                 modifier = Modifier
@@ -1073,9 +1363,17 @@ fun SessionHistoryCard(
         if (session.recentSessions.isEmpty()) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLowest,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
+                color = if (isLiquid) {
+                    Color(0xFF071220).copy(alpha = 0.52f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerLowest
+                },
+                border = if (isLiquid) {
+                    BorderStroke(1.dp, liquidBorderBrush(0.65f))
+                } else {
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                }
             ) {
                 Row(
                     modifier = Modifier
@@ -1101,9 +1399,17 @@ fun SessionHistoryCard(
         } else {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLowest,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+                shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
+                color = if (isLiquid) {
+                    Color(0xFF071220).copy(alpha = 0.52f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerLowest
+                },
+                border = if (isLiquid) {
+                    BorderStroke(1.dp, liquidBorderBrush(0.65f))
+                } else {
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+                }
             ) {
                 Column(
                     modifier = Modifier

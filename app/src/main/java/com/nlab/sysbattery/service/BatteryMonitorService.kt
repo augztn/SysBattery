@@ -10,12 +10,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
+import androidx.core.graphics.drawable.IconCompat
 import com.nlab.sysbattery.MainActivity
 import com.nlab.sysbattery.R
 import com.nlab.sysbattery.data.BatterySessionDbHelper
@@ -41,10 +48,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.io.BufferedReader
-import java.io.File
-import java.io.FileInputStream
-import java.io.InputStreamReader
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -54,8 +57,8 @@ import kotlin.math.roundToInt
  * State-Driven Battery Monitor Service:
  * 1. Hardware State Tracking (ACTION_SCREEN_ON, ACTION_SCREEN_OFF, ACTION_POWER_CONNECTED, ACTION_POWER_DISCONNECTED)
  * 2. Monotonic clock differential math (SystemClock.elapsedRealtime() & SystemClock.uptimeMillis())
- * 3. Screen-off isolated Deep Sleep vs Awake wakelock ratio engine + kernel cpuidle residency hooks
- * 4. Low-overhead multi-row status notification with 30s / integer-% / state-transition throttling
+ * 3. Screen-off isolated Deep Sleep vs Awake wakelock ratio engine
+ * 4. Low-overhead multi-row status notification with 1s screen-on live updates
  */
 class BatteryMonitorService : Service() {
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -67,7 +70,6 @@ class BatteryMonitorService : Service() {
     private lateinit var sessionDb: BatterySessionDbHelper
     private var previousLevel: Int? = null
     private var previousSampleElapsedRealtime = 0L
-    private var previousSampleUptimeMillis = 0L
     private var previousChargeCounterMicroAmpHours: Long? = null
     private var monitorJob: Job? = null
     private var screenOnMillis = 0L
@@ -76,24 +78,37 @@ class BatteryMonitorService : Service() {
     private var deepSleepMillis = 0L
     private var screenOnSinceSampleMillis = 0L
     private var screenOffSinceSampleMillis = 0L
+    private var deepSleepSinceSampleMillis = 0L
+    private var awakeSinceSampleMillis = 0L
     private var activeDrainPercent = 0.0
     private var idleDrainPercent = 0.0
+    private var deepSleepDrainPercent = 0.0
+    private var awakeDrainPercent = 0.0
     private var activeDrainMillis = 0L
     private var idleDrainMillis = 0L
+    private var subPercentSinceLevelChange = 0.0
+    private var onMillisSinceLevelChange = 0L
+    private var offMillisSinceLevelChange = 0L
+    private var sleepMillisSinceLevelChange = 0L
+    private var awakeMillisSinceLevelChange = 0L
     private var previousCharging: Boolean? = null
     private var thresholdResetTriggered = false
     private var screenStateInteractive: Boolean? = null
     private var screenStateSinceElapsed = 0L
     private var screenStateSinceUptime = 0L
-    private var screenStateSinceKernelIdleUs = 0L
     private val rateSamples = mutableListOf<BatteryStatsCalculator.TimedSample>()
     private var lastRateDirection: BatteryStatsCalculator.Direction? = null
     private var screenReceiverRegistered = false
 
-    // Notification Throttle Tracking (30s timer, integer % drop, or state transition)
+    // Notification Throttle Tracking (1s live updates while CPU is awake)
     private var lastNotificationUpdateElapsedMs = 0L
+    private var lastPersistElapsedMs = 0L
+    private var lastRollingQueryElapsedMs = 0L
+    private var cachedRolling24h = BatterySessionDbHelper.Rolling24hSummary()
     private var lastNotifiedBatteryLevel: Int? = null
     private var lastNotifiedCharging: Boolean? = null
+    private var cachedIconLevel: Int? = null
+    private var cachedBatteryPercentIcon: IconCompat? = null
 
     // State-Driven Open Session Marker
     private var powerConnected: Boolean = false
@@ -107,25 +122,11 @@ class BatteryMonitorService : Service() {
      * Structured Data Transport Object (NotificationStatePayload) for the Multi-Row Notification.
      */
     data class NotificationStatePayload(
-        val batteryLevelPercent: Int?,
-        val temperatureText: String?,
-        val chargingDirectionLabel: String,
-        val instantaneousCurrentMa: Int?,
         val headerLine: String,
-        val activeDrainRatePerHour: Double,
-        val idleDrainRatePerHour: Double,
         val rateLine: String,
-        val screenOnDurationMillis: Long,
-        val screenOnDropPercent: Int,
         val screenOnLine: String,
-        val screenOffDurationMillis: Long,
-        val screenOffDropPercent: Int,
         val screenOffLine: String,
-        val deepSleepDurationMillis: Long,
-        val deepSleepRatioPercent: Double,
         val deepSleepLine: String,
-        val awakeScreenOffDurationMillis: Long,
-        val awakeScreenOffRatioPercent: Double,
         val awakeLine: String,
         val bodyText: String
     )
@@ -160,10 +161,12 @@ class BatteryMonitorService : Service() {
         val activeTimeDropText: String = "0s (0%)",
         val idleTimeDropText: String = "0s (0%)",
         val sessionTimeDropText: String = "0s (0%)",
-        val awakeTimeDropText: String = "0s (0.00%)",
-        val deepSleepTimeDropText: String = "0s (0.00%)",
+        val awakeTimeDropText: String = "0s (0%)",
+        val deepSleepTimeDropText: String = "0s (0%)",
         val activeLossPercent: Double = 0.0,
         val idleLossPercent: Double = 0.0,
+        val deepSleepLossPercent: Double = 0.0,
+        val awakeLossPercent: Double = 0.0,
         val totalLossPercent: Double = 0.0,
         val screenOnMillis: Long = 0L,
         val screenOffMillis: Long = 0L,
@@ -176,8 +179,6 @@ class BatteryMonitorService : Service() {
         val currentSessionCurrentLevel: Int? = null,
         val currentSessionDurationMs: Long = 0L,
         val currentSessionRateText: String = "0.00%/hr",
-        val rolling24hActiveRate: String = "0.00%/hr",
-        val rolling24hIdleRate: String = "0.00%/hr",
         val recentSessions: List<BatterySessionDbHelper.SessionRecord> = emptyList()
     )
 
@@ -194,21 +195,18 @@ class BatteryMonitorService : Service() {
         const val ACTION_STOP = "com.nlab.sysbattery.action.STOP"
         const val ACTION_REFRESH = "com.nlab.sysbattery.action.REFRESH"
         const val EXTRA_INTERVAL_MS = "interval_ms"
-        private const val DEFAULT_INTERVAL_MS = 2_000L
-        private const val SCREEN_OFF_INTERVAL_MS = 60_000L
-        private const val NOTIFICATION_THROTTLE_SCREEN_ON_MS = 2_000L
-        private const val NOTIFICATION_THROTTLE_SCREEN_OFF_MS = 60_000L
+        private const val DEFAULT_INTERVAL_MS = 1_000L
+        private const val NOTIFICATION_THROTTLE_MS = 1_000L
+        private const val PERSIST_THROTTLE_MS = 5_000L
+        private const val ROLLING_QUERY_THROTTLE_MS = 30_000L
         private const val CHANNEL_ID = "sysbattery_monitor"
+        private const val COUNTERS_SCHEMA_VERSION = 4
         const val PREFS_NAME = "sysbattery"
         const val PREF_MONITOR_ENABLED = "monitor_enabled"
-        const val PREF_DRAIN_READING_METHOD = "drain_reading_method"
-        const val PREF_DRAIN_DISPLAY_MODE = PREF_DRAIN_READING_METHOD
+        const val PREF_DRAIN_DISPLAY_MODE = "drain_reading_method"
         const val METHOD_BOTH = "Both (Time - % & %/hr)"
         const val METHOD_TIME_DROP = "Time - % Drop (20m - 5%)"
         const val METHOD_RATE_ONLY = "Hourly Rate (%/hr)"
-        const val DRAIN_MODE_BOTH = METHOD_BOTH
-        const val DRAIN_MODE_ELAPSED = METHOD_TIME_DROP
-        const val DRAIN_MODE_RATE = METHOD_RATE_ONLY
         private const val NOTIFICATION_ID = 4102
 
         @Volatile
@@ -221,14 +219,25 @@ class BatteryMonitorService : Service() {
             val appCtx = context.applicationContext
             runCatching { BatterySessionDbHelper.getInstance(appCtx).clearAllSessions() }
             appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putInt("counters_schema_v", COUNTERS_SCHEMA_VERSION)
                 .putLong("screen_on_ms", 0L)
                 .putLong("screen_off_ms", 0L)
                 .putLong("awake_ms", 0L)
                 .putLong("deep_sleep_ms", 0L)
+                .putLong("screen_state_since_elapsed", 0L)
+                .putLong("screen_state_since_uptime", 0L)
+                .putBoolean("screen_state_has_saved", false)
                 .putFloat("active_drain_percent", 0f)
                 .putFloat("idle_drain_percent", 0f)
+                .putFloat("deep_sleep_drain_percent", 0f)
+                .putFloat("awake_drain_percent", 0f)
                 .putLong("active_drain_ms", 0L)
                 .putLong("idle_drain_ms", 0L)
+                .putFloat("sub_percent_since_lvl", 0f)
+                .putLong("on_ms_since_lvl", 0L)
+                .putLong("off_ms_since_lvl", 0L)
+                .putLong("sleep_ms_since_lvl", 0L)
+                .putLong("awake_ms_since_lvl", 0L)
                 .putBoolean("open_session_active", false)
                 .putLong("open_start_elapsed_ms", 0L)
                 .putInt("open_start_battery_level", -1)
@@ -248,7 +257,7 @@ class BatteryMonitorService : Service() {
                 .putBoolean(PREF_MONITOR_ENABLED, true).apply()
             val intent = Intent(appCtx, BatteryMonitorService::class.java)
                 .setAction(ACTION_START)
-                .putExtra(EXTRA_INTERVAL_MS, intervalMs.coerceIn(2_000L, 60_000L))
+                .putExtra(EXTRA_INTERVAL_MS, intervalMs.coerceIn(1_000L, 60_000L))
             runCatching {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     appCtx.startForegroundService(intent)
@@ -282,7 +291,10 @@ class BatteryMonitorService : Service() {
 
         fun formatDropPercent(percent: Double): String {
             val clean = percent.coerceAtLeast(0.0)
-            if (!clean.isFinite() || clean < 0.05) return "0%"
+            if (!clean.isFinite() || clean < 0.005) return "0%"
+            if (clean < 0.1) {
+                return String.format(Locale.getDefault(), "%.2f%%", clean)
+            }
             val roundedTenth = (clean * 10.0).roundToInt() / 10.0
             return if (abs(roundedTenth - roundedTenth.roundToInt()) < 0.05) {
                 "${roundedTenth.roundToInt()}%"
@@ -359,31 +371,6 @@ class BatteryMonitorService : Service() {
         prop ?: reader.readSnapshot().levelPercent
     }.getOrNull()
 
-    private fun readKernelDeepIdleMicros(): Long {
-        val baseDir = File("/sys/devices/system/cpu/cpu0/cpuidle")
-        if (!baseDir.isDirectory || !baseDir.canRead()) return 0L
-        var totalDeepIdleUs = 0L
-        runCatching {
-            val states = baseDir.listFiles() ?: return 0L
-            for (stateDir in states) {
-                val name = stateDir.name
-                if (name.startsWith("state") && name != "state0") {
-                    val timeFile = File(stateDir, "time")
-                    if (timeFile.isFile && timeFile.canRead()) {
-                        FileInputStream(timeFile).use { fis ->
-                            BufferedReader(InputStreamReader(fis), 64).use { br ->
-                                val line = br.readLine()?.trim()
-                                val us = line?.toLongOrNull() ?: 0L
-                                if (us > 0L) totalDeepIdleUs += us
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return totalDeepIdleUs
-    }
-
     private fun seedOpenSession(
         type: BatterySessionDbHelper.SessionType,
         nowElapsed: Long,
@@ -410,6 +397,9 @@ class BatteryMonitorService : Service() {
                 runCatching { sampleAndPublish(forceNotificationUpdate = true) }
                 return@launch
             }
+
+            // Flush accumulated screen time and battery drain for the session that just ended BEFORE switching session type
+            runCatching { sampleAndPublish(forceNotificationUpdate = true) }
 
             val currentLevel = readCurrentBatteryLevel() ?: previousLevel ?: return@launch
             val targetType = if (interactive) {
@@ -445,12 +435,14 @@ class BatteryMonitorService : Service() {
                     endBatteryLevel = closedSessionArgs.endLevel,
                     measuredSubPercentDrop = closedSessionArgs.subPercentDrop
                 )
+                cachedRolling24h = sessionDb.queryRolling24hSummary()
+                lastRollingQueryElapsedMs = nowElapsed
             }
             persistCounters()
-            if (interactive && isRunningInForeground) {
+            persistRateSamples()
+            lastPersistElapsedMs = nowElapsed
+            if (monitorJob?.isActive != true && isRunningInForeground) {
                 startMonitorLoop(currentLoopIntervalMs, forceImmediateNotification = true)
-            } else {
-                runCatching { sampleAndPublish(forceNotificationUpdate = true) }
             }
         }
     }
@@ -473,6 +465,16 @@ class BatteryMonitorService : Service() {
             openSubPercentDrop = 0.0
         }
         scope.launch {
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            if (prefs.safeBoolean("reset_on_plug", true)) {
+                synchronized(sampleLock) {
+                    resetCounters()
+                    thresholdResetTriggered = false
+                    prefs.edit().putBoolean("threshold_reset_triggered", false).apply()
+                    rateSamples.clear()
+                    previousCharging = true
+                }
+            }
             runCatching { sampleAndPublish(forceNotificationUpdate = true) }
         }
     }
@@ -573,12 +575,9 @@ class BatteryMonitorService : Service() {
                     if (t is CancellationException) throw t
                     DiagnosticLogger.error("Battery monitor iteration failed; will retry", t)
                 }
-                val sleepDuration = if (screenStateInteractive == false) {
-                    SCREEN_OFF_INTERVAL_MS
-                } else {
-                    interval
-                }
-                delay(sleepDuration)
+                // delay() uses CLOCK_MONOTONIC (uptimeMillis): it ticks every 1s while the CPU is Awake
+                // (updating Awake & discharge live) and automatically pauses in hardware during Deep Sleep.
+                delay(interval)
             }
         }
     }
@@ -648,28 +647,29 @@ class BatteryMonitorService : Service() {
             )
         )
         trimRateSamples(sample.timestampMillis)
-        persistRateSamples()
         val rates = BatteryStatsCalculator.calculateWindowed(rateSamples.toList(), sample, charging)
 
+        val interactive = (getSystemService(POWER_SERVICE) as? PowerManager)?.isInteractive ?: true
+        val (onElapsed, offElapsed, sleepElapsed, awakeElapsed) = updateAndMeasureScreenTime(interactive)
         val nowElapsed = SystemClock.elapsedRealtime()
-        val nowUptime = SystemClock.uptimeMillis()
         val elapsed = if (previousSampleElapsedRealtime > 0L) {
             (nowElapsed - previousSampleElapsedRealtime).coerceAtLeast(0L)
         } else 0L
-
-        val interactive = (getSystemService(POWER_SERVICE) as? PowerManager)?.isInteractive ?: true
-        val (onElapsed, offElapsed) = updateAndMeasureScreenTime(interactive, nowElapsed, nowUptime)
         val trackedElapsed = onElapsed + offElapsed
 
         val oldLevel = previousLevel
         val newLevel = sample.levelPercent
         val resetAtThreshold = preferences.safeBoolean("reset_at_threshold", true)
-        val threshold = preferences.safeInt("reset_threshold_percent", 90).coerceIn(50, 100)
-        if (charging != true || newLevel == null || newLevel < threshold) {
-            thresholdResetTriggered = false
+        val threshold = preferences.safeInt("reset_threshold_percent", 100).coerceIn(50, 100)
+        if (newLevel == null || newLevel < threshold) {
+            if (thresholdResetTriggered) {
+                thresholdResetTriggered = false
+                preferences.edit().putBoolean("threshold_reset_triggered", false).apply()
+            }
         } else if (resetAtThreshold && !thresholdResetTriggered) {
             resetCounters()
             thresholdResetTriggered = true
+            preferences.edit().putBoolean("threshold_reset_triggered", true).apply()
             rateSamples.clear()
         }
 
@@ -690,7 +690,12 @@ class BatteryMonitorService : Service() {
         activeDrainMillis += onElapsed
         idleDrainMillis += offElapsed
 
-        if (charging == false && elapsed > 0L) {
+        if (charging == false && (elapsed > 0L || trackedElapsed > 0L)) {
+            onMillisSinceLevelChange += onElapsed
+            offMillisSinceLevelChange += offElapsed
+            sleepMillisSinceLevelChange += sleepElapsed
+            awakeMillisSinceLevelChange += awakeElapsed
+
             val previousCounter = previousChargeCounterMicroAmpHours
             val currentCounter = sample.chargeCounterMicroAmpHours
             val capacityUah = (sample.fullChargeCapacityMicroAmpHours
@@ -702,41 +707,110 @@ class BatteryMonitorService : Service() {
 
             val currentMa = sample.currentMicroAmps?.let { abs(it) / 1_000.0 }
                 ?.takeIf { it.isFinite() && it in 1.0..15_000.0 }
-            val currentLoss = if (currentMa != null) {
-                (currentMa * (elapsed / 3_600_000.0) / capacityMah * 100.0)
-                    .takeIf { it.isFinite() && it in 0.0..5.0 }
-            } else null
 
-            val maxPlausibleIntervalLoss = (elapsed / 3_600_000.0 * 120.0).coerceIn(0.02, 5.0)
-            val counterDeltaUah = if (previousCounter != null && currentCounter != null) {
-                previousCounter - currentCounter
-            } else null
-            val counterBasedLossPercent = if (
-                currentLoss == null &&
-                counterDeltaUah != null && counterDeltaUah in 1L..100_000L &&
-                trackedElapsed > 0L
-            ) {
-                (counterDeltaUah.toDouble() / capacityUah.toDouble() * 100.0)
-                    .takeIf { it.isFinite() && it in 0.0..maxPlausibleIntervalLoss }
-            } else null
+            val rawOnLoss = if (onElapsed > 0L) {
+                val activeMa = currentMa ?: 300.0
+                (activeMa * (onElapsed / 3_600_000.0) / capacityMah * 100.0)
+                    .takeIf { it.isFinite() && it in 0.0..5.0 } ?: 0.0
+            } else 0.0
 
-            val intervalLossPercent = currentLoss
-                ?: counterBasedLossPercent
-                ?: rates.batteryPercentPerHour?.takeIf { it.isFinite() && it in 0.0..500.0 }
-                    ?.let { it * elapsed / 3_600_000.0 }
-                ?: if (oldLevel != null && newLevel != null && oldLevel > newLevel &&
-                    oldLevel - newLevel <= 10
-                ) (oldLevel - newLevel).toDouble() else null
+            val totalOffSoFar = synchronized(screenStateLock) { screenOffMillis }
+            val (rawSleepLoss, rawAwakeLoss) = if (offElapsed > 0L) {
+                val sleepMa = ((currentMa ?: 180.0) * 0.08).coerceIn(12.0, 28.0)
+                // Use live fuel-gauge current during Awake; only clamp the first 2 seconds after screen-off
+                // to prevent screen-on backlight current from spiking a 1-second screen lock.
+                val maxAwakeMa = if (totalOffSoFar < 2_500L) 220.0 else 1_200.0
+                val awakeMa = (currentMa ?: 180.0).coerceIn(45.0, maxAwakeMa)
 
-            if (intervalLossPercent != null && trackedElapsed > 0L) {
-                activeDrainPercent += intervalLossPercent * onElapsed / trackedElapsed
-                idleDrainPercent += intervalLossPercent * offElapsed / trackedElapsed
+                val calcSleep = (sleepMa * (sleepElapsed / 3_600_000.0) / capacityMah * 100.0)
+                    .takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
+                val calcAwake = (awakeMa * (awakeElapsed / 3_600_000.0) / capacityMah * 100.0)
+                    .takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
+                val calcTotalOff = calcSleep + calcAwake
+
+                val counterDeltaUah = if (previousCounter != null && currentCounter != null) {
+                    previousCounter - currentCounter
+                } else null
+                val maxPlausibleOffLoss = (offElapsed / 3_600_000.0 * 35.0).coerceIn(0.01, 5.0)
+                val counterOffLoss = if (
+                    onElapsed < 2_000L &&
+                    offElapsed >= 15_000L &&
+                    counterDeltaUah != null &&
+                    counterDeltaUah in 1L..100_000L
+                ) {
+                    (counterDeltaUah.toDouble() / capacityUah.toDouble() * 100.0)
+                        .takeIf { it.isFinite() && it in 0.0..maxPlausibleOffLoss }
+                } else null
+
+                if (counterOffLoss != null && calcTotalOff > 0.0) {
+                    val sleepRatio = (calcSleep / calcTotalOff).coerceIn(0.0, 1.0)
+                    val sLoss = counterOffLoss * sleepRatio
+                    Pair(sLoss, (counterOffLoss - sLoss).coerceAtLeast(0.0))
+                } else {
+                    Pair(calcSleep, calcAwake)
+                }
+            } else Pair(0.0, 0.0)
+
+            val rawOffLoss = rawSleepLoss + rawAwakeLoss
+            val rawTickLoss = rawOnLoss + rawOffLoss
+
+            if (rawTickLoss > 0.0) {
+                activeDrainPercent += rawOnLoss
+                idleDrainPercent += rawOffLoss
+                deepSleepDrainPercent += rawSleepLoss
+                awakeDrainPercent += rawAwakeLoss
+                subPercentSinceLevelChange += rawTickLoss
                 synchronized(screenStateLock) {
                     if (openSessionActive) {
-                        openSubPercentDrop += intervalLossPercent
+                        openSubPercentDrop += rawTickLoss
                     }
                 }
             }
+
+            val levelDropped = oldLevel != null && newLevel != null && newLevel < oldLevel && (oldLevel - newLevel) in 1..10
+            if (levelDropped) {
+                val intDrop = (oldLevel!! - newLevel!!).toDouble()
+                if (subPercentSinceLevelChange < intDrop) {
+                    val shortfall = (intDrop - subPercentSinceLevelChange).coerceAtLeast(0.0)
+                    val windowTotalMs = (onMillisSinceLevelChange + offMillisSinceLevelChange).coerceAtLeast(1L)
+                    val onShare = if (onMillisSinceLevelChange + offMillisSinceLevelChange > 0L) {
+                        onMillisSinceLevelChange.toDouble() / windowTotalMs.toDouble()
+                    } else if (trackedElapsed > 0L) {
+                        onElapsed.toDouble() / trackedElapsed.toDouble()
+                    } else 1.0
+                    val extraOnLoss = (shortfall * onShare).coerceIn(0.0, shortfall)
+                    val extraOffLoss = (shortfall - extraOnLoss).coerceAtLeast(0.0)
+                    activeDrainPercent += extraOnLoss
+                    idleDrainPercent += extraOffLoss
+                    if (extraOffLoss > 0.0) {
+                        val sleepWeight = sleepMillisSinceLevelChange.toDouble()
+                        val awakeWeight = awakeMillisSinceLevelChange.toDouble() * 6.0
+                        val totalWeight = (sleepWeight + awakeWeight).coerceAtLeast(1.0)
+                        val extraSleepLoss = (extraOffLoss * (sleepWeight / totalWeight)).coerceIn(0.0, extraOffLoss)
+                        val extraAwakeLoss = (extraOffLoss - extraSleepLoss).coerceAtLeast(0.0)
+                        deepSleepDrainPercent += extraSleepLoss
+                        awakeDrainPercent += extraAwakeLoss
+                    }
+                    synchronized(screenStateLock) {
+                        if (openSessionActive) {
+                            openSubPercentDrop += shortfall
+                        }
+                    }
+                    subPercentSinceLevelChange = 0.0
+                } else {
+                    subPercentSinceLevelChange = (subPercentSinceLevelChange - intDrop).coerceIn(0.0, 0.8)
+                }
+                onMillisSinceLevelChange = 0L
+                offMillisSinceLevelChange = 0L
+                sleepMillisSinceLevelChange = 0L
+                awakeMillisSinceLevelChange = 0L
+            }
+        } else if (oldLevel != null && newLevel != null && newLevel > oldLevel) {
+            subPercentSinceLevelChange = 0.0
+            onMillisSinceLevelChange = 0L
+            offMillisSinceLevelChange = 0L
+            sleepMillisSinceLevelChange = 0L
+            awakeMillisSinceLevelChange = 0L
         }
         previousChargeCounterMicroAmpHours = sample.chargeCounterMicroAmpHours
 
@@ -745,12 +819,7 @@ class BatteryMonitorService : Service() {
 
         val levelChanged = newLevel != null && newLevel != lastNotifiedBatteryLevel
         val chargingChanged = charging != lastNotifiedCharging
-        val throttleMs = if (interactive) {
-            NOTIFICATION_THROTTLE_SCREEN_ON_MS
-        } else {
-            NOTIFICATION_THROTTLE_SCREEN_OFF_MS
-        }
-        val timerExpired = (nowElapsed - lastNotificationUpdateElapsedMs) >= throttleMs
+        val timerExpired = (nowElapsed - lastNotificationUpdateElapsedMs) >= NOTIFICATION_THROTTLE_MS
         if (forceNotificationUpdate || levelChanged || chargingChanged || timerExpired) {
             runCatching {
                 notificationManager()?.notify(NOTIFICATION_ID, buildNotification(sample, rates, charging, session))
@@ -762,8 +831,11 @@ class BatteryMonitorService : Service() {
 
         previousLevel = newLevel
         previousSampleElapsedRealtime = nowElapsed
-        previousSampleUptimeMillis = nowUptime
-        persistCounters()
+        if (forceNotificationUpdate || levelChanged || chargingChanged || (nowElapsed - lastPersistElapsedMs) >= PERSIST_THROTTLE_MS) {
+            persistRateSamples()
+            persistCounters()
+            lastPersistElapsedMs = nowElapsed
+        }
     }
 
     private fun registerHardwareStateReceiver() {
@@ -787,31 +859,38 @@ class BatteryMonitorService : Service() {
         }
     }
 
-    private fun updateScreenState(interactive: Boolean, now: Long = SystemClock.elapsedRealtime()) {
-        synchronized(screenStateLock) { updateScreenStateLocked(interactive, now, SystemClock.uptimeMillis()) }
+    private fun updateScreenState(interactive: Boolean, @Suppress("UNUSED_PARAMETER") now: Long = 0L) {
+        synchronized(screenStateLock) {
+            updateScreenStateLocked(
+                interactive = interactive,
+                nowElapsed = SystemClock.elapsedRealtime(),
+                nowUptime = SystemClock.uptimeMillis()
+            )
+        }
     }
 
-    private fun updateAndMeasureScreenTime(
-        interactive: Boolean,
-        nowElapsed: Long,
-        nowUptime: Long
-    ): Pair<Long, Long> =
+    private fun updateAndMeasureScreenTime(interactive: Boolean): Quad =
         synchronized(screenStateLock) {
+            val nowElapsed = SystemClock.elapsedRealtime()
+            val nowUptime = SystemClock.uptimeMillis()
             when (screenStateInteractive) {
                 null -> {
                     screenStateInteractive = interactive
                     screenStateSinceElapsed = nowElapsed
                     screenStateSinceUptime = nowUptime
-                    screenStateSinceKernelIdleUs = if (!interactive) readKernelDeepIdleMicros() else 0L
                 }
                 interactive -> accumulateScreenTimeLocked(nowElapsed, nowUptime)
                 else -> updateScreenStateLocked(interactive, nowElapsed, nowUptime)
             }
             val onDelta = screenOnSinceSampleMillis
             val offDelta = screenOffSinceSampleMillis
+            val sleepDelta = deepSleepSinceSampleMillis
+            val awakeDelta = awakeSinceSampleMillis
             screenOnSinceSampleMillis = 0L
             screenOffSinceSampleMillis = 0L
-            Pair(onDelta, offDelta)
+            deepSleepSinceSampleMillis = 0L
+            awakeSinceSampleMillis = 0L
+            Quad(onDelta, offDelta, sleepDelta, awakeDelta)
         }
 
     private fun updateScreenStateLocked(interactive: Boolean, nowElapsed: Long, nowUptime: Long) {
@@ -819,26 +898,31 @@ class BatteryMonitorService : Service() {
         screenStateInteractive = interactive
         screenStateSinceElapsed = nowElapsed
         screenStateSinceUptime = nowUptime
-        screenStateSinceKernelIdleUs = if (!interactive) readKernelDeepIdleMicros() else 0L
     }
 
-    private fun accumulateScreenTime(
-        nowElapsed: Long = SystemClock.elapsedRealtime(),
-        nowUptime: Long = SystemClock.uptimeMillis()
-    ) {
-        synchronized(screenStateLock) { accumulateScreenTimeLocked(nowElapsed, nowUptime) }
+    private fun accumulateScreenTime() {
+        synchronized(screenStateLock) {
+            accumulateScreenTimeLocked(
+                nowElapsed = SystemClock.elapsedRealtime(),
+                nowUptime = SystemClock.uptimeMillis()
+            )
+        }
     }
 
     /**
      * Strictly isolates Screen-On vs Screen-Off time and tracks Deep Sleep vs Awake
-     * ONLY during Screen-Off periods so that (Deep Sleep + Awake == Screen Off).
+     * ONLY during Screen-Off periods using Android's monotonic clocks:
+     * - elapsedRealtime() advances continuously including Deep Sleep (system suspend).
+     * - uptimeMillis() advances ONLY when the CPU is Awake and pauses during Deep Sleep.
      */
     private fun accumulateScreenTimeLocked(nowElapsed: Long, nowUptime: Long) {
         val sinceElapsed = screenStateSinceElapsed
         val sinceUptime = screenStateSinceUptime
         if (sinceElapsed <= 0L || nowElapsed <= sinceElapsed) {
-            screenStateSinceElapsed = nowElapsed
-            screenStateSinceUptime = nowUptime
+            if (sinceElapsed <= 0L) {
+                screenStateSinceElapsed = nowElapsed
+                screenStateSinceUptime = nowUptime
+            }
             return
         }
         val elapsed = nowElapsed - sinceElapsed
@@ -850,22 +934,18 @@ class BatteryMonitorService : Service() {
             false -> {
                 screenOffMillis += elapsed
                 screenOffSinceSampleMillis += elapsed
-                val upDelta = if (sinceUptime > 0L) {
+                val rawUpDelta = if (sinceUptime > 0L && nowUptime >= sinceUptime) {
                     (nowUptime - sinceUptime).coerceIn(0L, elapsed)
-                } else elapsed
-                val monotonicSleepDelta = (elapsed - upDelta).coerceAtLeast(0L)
-
-                val currentKernelIdleUs = readKernelDeepIdleMicros()
-                val kernelIdleDeltaMs = if (screenStateSinceKernelIdleUs > 0L && currentKernelIdleUs > screenStateSinceKernelIdleUs) {
-                    ((currentKernelIdleUs - screenStateSinceKernelIdleUs) / 1000L).coerceIn(0L, elapsed)
                 } else 0L
-                screenStateSinceKernelIdleUs = currentKernelIdleUs
-
-                val effectiveSleepDelta = max(monotonicSleepDelta, kernelIdleDeltaMs).coerceIn(0L, elapsed)
+                val rawSleepDelta = (elapsed - rawUpDelta).coerceAtLeast(0L)
+                // System suspend-to-RAM takes >=50ms; sub-50ms differences on a 1s tick are clock rounding jitter
+                val effectiveSleepDelta = if (rawSleepDelta < 50L) 0L else rawSleepDelta
                 val effectiveAwakeDelta = (elapsed - effectiveSleepDelta).coerceAtLeast(0L)
 
                 deepSleepMillis += effectiveSleepDelta
                 awakeMillis += effectiveAwakeDelta
+                deepSleepSinceSampleMillis += effectiveSleepDelta
+                awakeSinceSampleMillis += effectiveAwakeDelta
             }
             null -> Unit
         }
@@ -878,7 +958,7 @@ class BatteryMonitorService : Service() {
         rateSamples.removeAll { it.timestampMillis < cutoff || it.timestampMillis > now }
         while (rateSamples.size > 60) rateSamples.removeAt(0)
         val compacted = rateSamples.fold(mutableListOf<BatteryStatsCalculator.TimedSample>()) { out, item ->
-            if (out.isEmpty() || item.timestampMillis - out.last().timestampMillis >= 15_000L) out.add(item)
+            if (out.isEmpty() || item.timestampMillis - out.last().timestampMillis >= 1_000L) out.add(item)
             else out[out.lastIndex] = item
             out
         }
@@ -921,11 +1001,11 @@ class BatteryMonitorService : Service() {
     }
 
     private fun resetCounters() {
-        val nowElapsed = SystemClock.elapsedRealtime()
-        val nowUptime = SystemClock.uptimeMillis()
         val currentLevel = readCurrentBatteryLevel() ?: previousLevel
         val interactive = (getSystemService(POWER_SERVICE) as? PowerManager)?.isInteractive ?: true
         synchronized(screenStateLock) {
+            val nowElapsed = SystemClock.elapsedRealtime()
+            val nowUptime = SystemClock.uptimeMillis()
             accumulateScreenTimeLocked(nowElapsed, nowUptime)
             screenOnMillis = 0L
             screenOffMillis = 0L
@@ -933,9 +1013,11 @@ class BatteryMonitorService : Service() {
             deepSleepMillis = 0L
             screenOnSinceSampleMillis = 0L
             screenOffSinceSampleMillis = 0L
+            deepSleepSinceSampleMillis = 0L
+            awakeSinceSampleMillis = 0L
+            screenStateInteractive = interactive
             screenStateSinceElapsed = nowElapsed
             screenStateSinceUptime = nowUptime
-            screenStateSinceKernelIdleUs = if (!interactive) readKernelDeepIdleMicros() else 0L
             if (!powerConnected && currentLevel != null) {
                 openSessionActive = true
                 openSessionType = if (interactive) {
@@ -953,8 +1035,15 @@ class BatteryMonitorService : Service() {
         }
         activeDrainPercent = 0.0
         idleDrainPercent = 0.0
+        deepSleepDrainPercent = 0.0
+        awakeDrainPercent = 0.0
         activeDrainMillis = 0L
         idleDrainMillis = 0L
+        subPercentSinceLevelChange = 0.0
+        onMillisSinceLevelChange = 0L
+        offMillisSinceLevelChange = 0L
+        sleepMillisSinceLevelChange = 0L
+        awakeMillisSinceLevelChange = 0L
         rateSamples.clear()
         runCatching { sessionDb.clearAllSessions() }
         persistRateSamples()
@@ -994,9 +1083,9 @@ class BatteryMonitorService : Service() {
         sample: BatterySysfsReader.Snapshot? = null,
         rates: BatteryStatsCalculator.Rates? = null
     ): SessionTelemetry {
-        val nowElapsed = SystemClock.elapsedRealtime()
-        val nowUptime = SystemClock.uptimeMillis()
         val (shownOnMillis, shownOffMillis, rawAwakeMillis, rawSleepMillis) = synchronized(screenStateLock) {
+            val nowElapsed = SystemClock.elapsedRealtime()
+            val nowUptime = SystemClock.uptimeMillis()
             val extraScreen = if (screenStateSinceElapsed > 0L) {
                 (nowElapsed - screenStateSinceElapsed).coerceAtLeast(0L)
             } else 0L
@@ -1004,17 +1093,11 @@ class BatteryMonitorService : Service() {
             val offMs = if (screenStateInteractive == false) screenOffMillis + extraScreen else screenOffMillis
 
             val (extraAwake, extraSleep) = if (screenStateInteractive == false && extraScreen > 0L) {
-                val upDelta = if (screenStateSinceUptime > 0L) {
+                val rawUpDelta = if (screenStateSinceUptime > 0L && nowUptime >= screenStateSinceUptime) {
                     (nowUptime - screenStateSinceUptime).coerceIn(0L, extraScreen)
-                } else extraScreen
-                val monotonicSleepDelta = (extraScreen - upDelta).coerceAtLeast(0L)
-                val currentKernelIdleUs = readKernelDeepIdleMicros()
-                val kernelIdleDeltaMs = if (
-                    screenStateSinceKernelIdleUs > 0L && currentKernelIdleUs > screenStateSinceKernelIdleUs
-                ) {
-                    ((currentKernelIdleUs - screenStateSinceKernelIdleUs) / 1000L).coerceIn(0L, extraScreen)
                 } else 0L
-                val slpDelta = max(monotonicSleepDelta, kernelIdleDeltaMs).coerceIn(0L, extraScreen)
+                val rawSlpDelta = (extraScreen - rawUpDelta).coerceAtLeast(0L)
+                val slpDelta = if (rawSlpDelta < 50L) 0L else rawSlpDelta
                 val awkDelta = (extraScreen - slpDelta).coerceAtLeast(0L)
                 Pair(awkDelta, slpDelta)
             } else {
@@ -1022,17 +1105,14 @@ class BatteryMonitorService : Service() {
             }
             Quad(onMs, offMs, awakeMillis + extraAwake, deepSleepMillis + extraSleep)
         }
+        val nowElapsed = SystemClock.elapsedRealtime()
 
         // Synchronize displayed seconds so Deep Sleep + Awake ALWAYS equals Screen Off to the exact second
         val totalOffSec = (shownOffMillis / 1000L).coerceAtLeast(0L)
-        val totalRawSleepTracked = (rawSleepMillis + rawAwakeMillis).coerceAtLeast(1L)
-        val rawSleepRatio = if (shownOffMillis > 0L) {
-            (rawSleepMillis.toDouble() / totalRawSleepTracked.toDouble()).coerceIn(0.0, 1.0)
-        } else 0.0
-        val sleepSec = if (totalOffSec > 0L) {
-            (totalOffSec * rawSleepRatio).roundToInt().toLong().coerceIn(0L, totalOffSec)
+        val awakeSec = if (totalOffSec > 0L) {
+            ((rawAwakeMillis + 500L) / 1000L).coerceIn(0L, totalOffSec)
         } else 0L
-        val awakeSec = (totalOffSec - sleepSec).coerceAtLeast(0L)
+        val sleepSec = (totalOffSec - awakeSec).coerceAtLeast(0L)
         val shownSleepMillis = sleepSec * 1000L
         val shownAwakeMillis = awakeSec * 1000L
 
@@ -1078,7 +1158,11 @@ class BatteryMonitorService : Service() {
         } else null
 
         val rolling24h = if (::sessionDb.isInitialized) {
-            sessionDb.queryRolling24hSummary()
+            if (lastRollingQueryElapsedMs == 0L || (nowElapsed - lastRollingQueryElapsedMs) >= ROLLING_QUERY_THROTTLE_MS) {
+                cachedRolling24h = sessionDb.queryRolling24hSummary()
+                lastRollingQueryElapsedMs = nowElapsed
+            }
+            cachedRolling24h
         } else {
             BatterySessionDbHelper.Rolling24hSummary()
         }
@@ -1110,14 +1194,23 @@ class BatteryMonitorService : Service() {
             }
         } else null
 
-        val continuousActiveRate = ratePerHourNumeric(activeDrainPercent, activeDrainMillis, charging)
-        val continuousIdleRate = ratePerHourNumeric(idleDrainPercent, idleDrainMillis, charging)
+        val activeLoss = activeDrainPercent.coerceAtLeast(0.0)
+        val idleLoss = idleDrainPercent.coerceAtLeast(0.0)
+
+        val continuousActiveRate = if (shownOnMillis >= 2_000L && activeLoss > 0.0) {
+            ratePerHourNumeric(activeLoss, shownOnMillis, charging)
+        } else 0.0
+
+        val continuousIdleRate = if (shownOffMillis >= 2_000L && idleLoss > 0.0) {
+            val rawRate = ratePerHourNumeric(idleLoss, shownOffMillis, charging)
+            if (shownOffMillis < 15_000L) rawRate.coerceAtMost(4.9) else rawRate
+        } else 0.0
 
         val activeRateVal = when {
             charging == true -> 0.0
             screenStateInteractive == true && liveInstantRate != null -> {
-                if (continuousActiveRate > 0.0 && activeDrainMillis >= 15_000L) {
-                    (liveInstantRate * 0.65 + continuousActiveRate * 0.35).coerceIn(0.0, 200.0)
+                if (continuousActiveRate > 0.0 && shownOnMillis >= 30_000L) {
+                    (continuousActiveRate * 0.70 + liveInstantRate * 0.30).coerceIn(0.0, 200.0)
                 } else {
                     liveInstantRate
                 }
@@ -1129,23 +1222,34 @@ class BatteryMonitorService : Service() {
 
         val idleRateVal = when {
             charging == true -> 0.0
+            shownOffMillis < 2_000L -> 0.0
             continuousIdleRate > 0.0 -> continuousIdleRate
             combined24hIdleMs >= BatterySessionDbHelper.MIN_VALID_SESSION_MS -> rolling24hIdleRateVal
-            screenStateInteractive == false && liveInstantRate != null -> liveInstantRate
             else -> 0.0
         }
 
         val activeRate = formatRatePerHourUI(activeRateVal)
         val idleRate = formatRatePerHourUI(idleRateVal)
-        val rolling24hActiveRate = formatRatePerHourUI(
-            if (rolling24hActiveRateVal > 0.0) rolling24hActiveRateVal else activeRateVal
-        )
-        val rolling24hIdleRate = formatRatePerHourUI(
-            if (rolling24hIdleRateVal > 0.0) rolling24hIdleRateVal else idleRateVal
-        )
 
-        val activeLoss = activeDrainPercent.coerceAtLeast(0.0)
-        val idleLoss = idleDrainPercent.coerceAtLeast(0.0)
+        val rawSleepLoss = deepSleepDrainPercent.coerceAtLeast(0.0)
+        val rawAwakeLoss = awakeDrainPercent.coerceAtLeast(0.0)
+        val rawIdleSubTotal = rawSleepLoss + rawAwakeLoss
+        val (deepSleepLoss, awakeLoss) = when {
+            idleLoss <= 0.0 || totalOffSec <= 0L -> Pair(0.0, 0.0)
+            sleepSec <= 0L -> Pair(0.0, idleLoss)
+            awakeSec <= 0L -> Pair(idleLoss, 0.0)
+            rawIdleSubTotal > 0.0 -> {
+                val scaledSleep = (idleLoss * (rawSleepLoss / rawIdleSubTotal)).coerceIn(0.0, idleLoss)
+                Pair(scaledSleep, (idleLoss - scaledSleep).coerceAtLeast(0.0))
+            }
+            else -> {
+                val sleepWeight = sleepSec.toDouble()
+                val awakeWeight = awakeSec.toDouble() * 6.0
+                val totalWeight = (sleepWeight + awakeWeight).coerceAtLeast(1.0)
+                val scaledSleep = (idleLoss * (sleepWeight / totalWeight)).coerceIn(0.0, idleLoss)
+                Pair(scaledSleep, (idleLoss - scaledSleep).coerceAtLeast(0.0))
+            }
+        }
         val totalLoss = (activeLoss + idleLoss).coerceAtLeast(0.0)
 
         val totalSessionMillis = (shownOnMillis + shownOffMillis).coerceAtLeast(0L)
@@ -1163,19 +1267,6 @@ class BatteryMonitorService : Service() {
             else -> "0.00%/hr"
         }
 
-        val deepSleepFormatted = String.format(
-            Locale.getDefault(),
-            "%s (%.1f%% of off)",
-            formatDuration(shownSleepMillis),
-            deepSleepShare
-        )
-        val awakeFormatted = String.format(
-            Locale.getDefault(),
-            "%s (%.1f%% of off)",
-            formatDuration(shownAwakeMillis),
-            awakeShare
-        )
-
         return SessionTelemetry(
             activeDrainRate = activeRate,
             idleDrainRate = idleRate,
@@ -1184,10 +1275,12 @@ class BatteryMonitorService : Service() {
             activeTimeDropText = formatTimeDrop(shownOnMillis, activeLoss),
             idleTimeDropText = formatTimeDrop(shownOffMillis, idleLoss),
             sessionTimeDropText = formatTimeDrop(totalSessionMillis, totalLoss),
-            awakeTimeDropText = awakeFormatted,
-            deepSleepTimeDropText = deepSleepFormatted,
+            awakeTimeDropText = formatTimeDrop(shownAwakeMillis, awakeLoss),
+            deepSleepTimeDropText = formatTimeDrop(shownSleepMillis, deepSleepLoss),
             activeLossPercent = activeLoss,
             idleLossPercent = idleLoss,
+            deepSleepLossPercent = deepSleepLoss,
+            awakeLossPercent = awakeLoss,
             totalLossPercent = totalLoss,
             screenOnMillis = shownOnMillis,
             screenOffMillis = shownOffMillis,
@@ -1200,8 +1293,6 @@ class BatteryMonitorService : Service() {
             currentSessionCurrentLevel = currentLevel,
             currentSessionDurationMs = openDurationMs,
             currentSessionRateText = openRateStr,
-            rolling24hActiveRate = rolling24hActiveRate,
-            rolling24hIdleRate = rolling24hIdleRate,
             recentSessions = rolling24h.recentSessions
         )
     }
@@ -1226,18 +1317,26 @@ class BatteryMonitorService : Service() {
         temperatureUnit: String,
         idleWarningText: String?
     ): NotificationStatePayload {
-        val levelInt = if (showBatteryPercentage) sample?.levelPercent else null
+        val levelInt = sample?.levelPercent
         val temperatureText = sample?.temperatureTenthsCelsius?.let {
             val celsius = it / 10.0
             val value = if (temperatureUnit == "Fahrenheit (°F)") celsius * 9.0 / 5.0 + 32.0 else celsius
             val unit = if (temperatureUnit == "Fahrenheit (°F)") "°F" else "°C"
             String.format(Locale.getDefault(), "%.0f%s", value, unit)
         }
-        val currentMa = if (showChargingPower) {
+        val showCurrent = if (charging == true) showChargingPower else true
+        val currentMa = if (showCurrent) {
             (rates?.currentMilliAmpsMagnitude
                 ?: sample?.currentMilliAmpsSigned?.let { abs(it) }
                     ?.takeIf { it.isFinite() && it in 1.0..20_000.0 })
                 ?.roundToInt()
+        } else null
+
+        val chargingWatts = if (charging == true && showChargingPower) {
+            rates?.powerWattsMagnitude?.takeIf { it.isFinite() && it > 0.05 }
+                ?: if (currentMa != null && sample?.voltageMilliVolts != null && sample.voltageMilliVolts > 0) {
+                    (currentMa / 1000.0) * (sample.voltageMilliVolts / 1000.0)
+                } else null
         } else null
 
         val modeLabel = when (charging) {
@@ -1253,6 +1352,9 @@ class BatteryMonitorService : Service() {
             if (currentMa != null && currentMa > 0) {
                 append(" ").append(currentMa).append(" mA")
             }
+            if (chargingWatts != null && chargingWatts > 0.05) {
+                append(String.format(Locale.getDefault(), " (%.1f W)", chargingWatts))
+            }
         }
 
         val activeRateFormatted = formatNotificationRate(tele.activeDrainRateValue)
@@ -1264,34 +1366,34 @@ class BatteryMonitorService : Service() {
             idleRateFormatted
         )
 
-        val screenOnDropInt = tele.activeLossPercent.coerceAtLeast(0.0).roundToInt()
-        val screenOffDropInt = tele.idleLossPercent.coerceAtLeast(0.0).roundToInt()
         val screenOnDropFormatted = formatDropPercent(tele.activeLossPercent)
         val screenOffDropFormatted = formatDropPercent(tele.idleLossPercent)
+        val deepSleepDropFormatted = formatDropPercent(tele.deepSleepLossPercent)
+        val awakeDropFormatted = formatDropPercent(tele.awakeLossPercent)
 
         val screenOnLine = String.format(
             Locale.getDefault(),
-            "Screen on: %s (%s drain)",
+            "Screen on: %s (%s)",
             formatDuration(tele.screenOnMillis),
             screenOnDropFormatted
         )
         val screenOffLine = String.format(
             Locale.getDefault(),
-            "Screen off: %s (%s drain)",
+            "Screen off: %s (%s)",
             formatDuration(tele.screenOffMillis),
             screenOffDropFormatted
         )
         val deepSleepLine = String.format(
             Locale.getDefault(),
-            "Deep sleep: %s (%.1f%% of screen off)",
+            "Deep sleep: %s (%s)",
             formatDuration(tele.deepSleepMillis),
-            tele.deepSleepShare
+            deepSleepDropFormatted
         )
         val awakeLine = String.format(
             Locale.getDefault(),
-            "Awake: %s (%.1f%% of screen off)",
+            "Awake: %s (%s)",
             formatDuration(tele.awakeMillis),
-            tele.awakeShare
+            awakeDropFormatted
         )
 
         val bodyLines = buildString {
@@ -1306,28 +1408,43 @@ class BatteryMonitorService : Service() {
         }
 
         return NotificationStatePayload(
-            batteryLevelPercent = levelInt,
-            temperatureText = temperatureText,
-            chargingDirectionLabel = modeLabel,
-            instantaneousCurrentMa = currentMa,
             headerLine = headerLine,
-            activeDrainRatePerHour = tele.activeDrainRateValue,
-            idleDrainRatePerHour = tele.idleDrainRateValue,
             rateLine = rateLine,
-            screenOnDurationMillis = tele.screenOnMillis,
-            screenOnDropPercent = screenOnDropInt,
             screenOnLine = screenOnLine,
-            screenOffDurationMillis = tele.screenOffMillis,
-            screenOffDropPercent = screenOffDropInt,
             screenOffLine = screenOffLine,
-            deepSleepDurationMillis = tele.deepSleepMillis,
-            deepSleepRatioPercent = tele.deepSleepShare,
             deepSleepLine = deepSleepLine,
-            awakeScreenOffDurationMillis = tele.awakeMillis,
-            awakeScreenOffRatioPercent = tele.awakeShare,
             awakeLine = awakeLine,
             bodyText = bodyLines
         )
+    }
+
+    private fun getOrCreateBatteryPercentIcon(level: Int): IconCompat {
+        val clamped = level.coerceIn(0, 100)
+        val existing = cachedBatteryPercentIcon
+        if (cachedIconLevel == clamped && existing != null) {
+            return existing
+        }
+        val sizePx = 96
+        val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val text = clamped.toString()
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.create("sans-serif-condensed", Typeface.BOLD)
+            textSize = when {
+                text.length >= 3 -> 52f
+                text.length == 2 -> 68f
+                else -> 74f
+            }
+        }
+        val fontMetrics = paint.fontMetrics
+        val centerY = (sizePx / 2f) - (fontMetrics.ascent + fontMetrics.descent) / 2f
+        canvas.drawText(text, sizePx / 2f, centerY, paint)
+        val icon = IconCompat.createWithBitmap(bitmap)
+        cachedIconLevel = clamped
+        cachedBatteryPercentIcon = icon
+        return icon
     }
 
     private fun buildNotification(
@@ -1344,7 +1461,12 @@ class BatteryMonitorService : Service() {
         val tele = session ?: computeSessionTelemetry(charging, sample, rates)
         val idleWarningEnabled = preferences.safeBoolean("idle_warning", true)
         val idleWarningLimit = preferences.safeInt("idle_warning_percent", 5).coerceIn(1, 20)
-        val idleWarningText = if (idleWarningEnabled && tele.idleDrainRateValue > idleWarningLimit) {
+        val idleWarningText = if (
+            idleWarningEnabled &&
+            tele.screenOffMillis >= 60_000L &&
+            tele.idleLossPercent >= 0.05 &&
+            tele.idleDrainRateValue > idleWarningLimit
+        ) {
             "High idle drain detected: ${tele.idleDrainRate} (limit $idleWarningLimit%/h)"
         } else null
 
@@ -1359,8 +1481,16 @@ class BatteryMonitorService : Service() {
             idleWarningText = idleWarningText
         )
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_sysbattery_status)
+        val currentLevel = sample?.levelPercent
+        val builder = if (showBatteryPercentage && currentLevel != null) {
+            NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(getOrCreateBatteryPercentIcon(currentLevel))
+        } else {
+            NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_sysbattery_status)
+        }
+
+        return builder
             .setContentTitle(payload.headerLine)
             .setContentText(payload.rateLine)
             .setContentIntent(
@@ -1396,8 +1526,31 @@ class BatteryMonitorService : Service() {
             .build()
     }
 
+    private fun readSystemBootCount(): Int = runCatching {
+        Settings.Global.getInt(contentResolver, Settings.Global.BOOT_COUNT, -1)
+    }.getOrDefault(-1)
+
     private fun restoreCounters() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.safeInt("counters_schema_v", 0) < COUNTERS_SCHEMA_VERSION) {
+            resetStoredCounters(applicationContext, notifyRunningService = false)
+            return
+        }
+        val nowElapsed = SystemClock.elapsedRealtime()
+        val savedSinceElapsed = prefs.safeLong("screen_state_since_elapsed", 0L)
+        val currentBootCount = readSystemBootCount()
+        val savedBootCount = prefs.safeInt("last_boot_count", -1)
+        val rebootDetected = (savedBootCount != -1 && currentBootCount != -1 && currentBootCount != savedBootCount) ||
+            (savedSinceElapsed > 0L && savedSinceElapsed > nowElapsed)
+        if (rebootDetected && prefs.safeBoolean("reset_on_reboot", true)) {
+            resetStoredCounters(applicationContext, notifyRunningService = false)
+            if (currentBootCount != -1) {
+                prefs.edit().putInt("last_boot_count", currentBootCount).apply()
+            }
+            return
+        }
+
+        thresholdResetTriggered = prefs.safeBoolean("threshold_reset_triggered", false)
         screenOnMillis = prefs.safeLong("screen_on_ms", 0L)
         screenOffMillis = prefs.safeLong("screen_off_ms", 0L)
         awakeMillis = prefs.safeLong("awake_ms", 0L)
@@ -1408,10 +1561,21 @@ class BatteryMonitorService : Service() {
         }
         activeDrainPercent = prefs.safeDouble("active_drain_percent", 0.0)
         idleDrainPercent = prefs.safeDouble("idle_drain_percent", 0.0)
+        deepSleepDrainPercent = prefs.safeDouble("deep_sleep_drain_percent", 0.0)
+        awakeDrainPercent = prefs.safeDouble("awake_drain_percent", 0.0)
         activeDrainMillis = prefs.safeLong("active_drain_ms", 0L)
         idleDrainMillis = prefs.safeLong("idle_drain_ms", 0L)
+        subPercentSinceLevelChange = prefs.safeDouble("sub_percent_since_lvl", 0.0)
+        onMillisSinceLevelChange = prefs.safeLong("on_ms_since_lvl", 0L)
+        offMillisSinceLevelChange = prefs.safeLong("off_ms_since_lvl", 0L)
+        sleepMillisSinceLevelChange = prefs.safeLong("sleep_ms_since_lvl", 0L)
+        awakeMillisSinceLevelChange = prefs.safeLong("awake_ms_since_lvl", 0L)
 
-        val nowElapsed = SystemClock.elapsedRealtime()
+        val nowUptime = SystemClock.uptimeMillis()
+        val hasSavedScreenState = prefs.safeBoolean("screen_state_has_saved", false)
+        val savedScreenInteractive = prefs.safeBoolean("screen_state_interactive", true)
+        val savedSinceUptime = prefs.safeLong("screen_state_since_uptime", 0L)
+
         val savedOpenActive = prefs.safeBoolean("open_session_active", false)
         val savedOpenStartMs = prefs.safeLong("open_start_elapsed_ms", 0L)
         val savedOpenStartLvl = prefs.safeInt("open_start_battery_level", -1)
@@ -1420,6 +1584,11 @@ class BatteryMonitorService : Service() {
             prefs.safeString("open_session_type", "ACTIVE")
         )
         synchronized(screenStateLock) {
+            if (hasSavedScreenState && savedSinceElapsed in 1L..nowElapsed && savedSinceUptime in 1L..nowUptime) {
+                screenStateInteractive = savedScreenInteractive
+                screenStateSinceElapsed = savedSinceElapsed
+                screenStateSinceUptime = savedSinceUptime
+            }
             if (savedOpenActive && savedOpenStartMs in 1L..nowElapsed && savedOpenStartLvl in 0..100) {
                 openSessionActive = true
                 openSessionType = savedOpenType
@@ -1431,8 +1600,8 @@ class BatteryMonitorService : Service() {
     }
 
     private fun persistCounters() {
-        val (totals, openSnap) = synchronized(screenStateLock) {
-            Pair(
+        val (totals, openSnap, stateSnap) = synchronized(screenStateLock) {
+            Triple(
                 Quad(screenOnMillis, screenOffMillis, awakeMillis, deepSleepMillis),
                 OpenSessionSnapshot(
                     openSessionActive,
@@ -1440,18 +1609,38 @@ class BatteryMonitorService : Service() {
                     openStartElapsedMs,
                     openStartBatteryLevel,
                     openSubPercentDrop
-                )
+                ),
+                Triple(screenStateInteractive, screenStateSinceElapsed, screenStateSinceUptime)
             )
         }
+        val currentBootCount = readSystemBootCount()
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putInt("counters_schema_v", COUNTERS_SCHEMA_VERSION)
+            .apply {
+                if (currentBootCount != -1) {
+                    putInt("last_boot_count", currentBootCount)
+                }
+            }
+            .putBoolean("threshold_reset_triggered", thresholdResetTriggered)
             .putLong("screen_on_ms", totals.a)
             .putLong("screen_off_ms", totals.b)
             .putLong("awake_ms", totals.c)
             .putLong("deep_sleep_ms", totals.d)
+            .putBoolean("screen_state_has_saved", stateSnap.first != null && stateSnap.second > 0L)
+            .putBoolean("screen_state_interactive", stateSnap.first ?: true)
+            .putLong("screen_state_since_elapsed", stateSnap.second)
+            .putLong("screen_state_since_uptime", stateSnap.third)
             .putFloat("active_drain_percent", activeDrainPercent.toFloat())
             .putFloat("idle_drain_percent", idleDrainPercent.toFloat())
+            .putFloat("deep_sleep_drain_percent", deepSleepDrainPercent.toFloat())
+            .putFloat("awake_drain_percent", awakeDrainPercent.toFloat())
             .putLong("active_drain_ms", activeDrainMillis)
             .putLong("idle_drain_ms", idleDrainMillis)
+            .putFloat("sub_percent_since_lvl", subPercentSinceLevelChange.toFloat())
+            .putLong("on_ms_since_lvl", onMillisSinceLevelChange)
+            .putLong("off_ms_since_lvl", offMillisSinceLevelChange)
+            .putLong("sleep_ms_since_lvl", sleepMillisSinceLevelChange)
+            .putLong("awake_ms_since_lvl", awakeMillisSinceLevelChange)
             .putBoolean("open_session_active", openSnap.active)
             .putString("open_session_type", openSnap.type.dbValue)
             .putLong("open_start_elapsed_ms", openSnap.startMs)

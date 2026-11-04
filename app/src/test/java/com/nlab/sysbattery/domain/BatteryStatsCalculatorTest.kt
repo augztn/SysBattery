@@ -117,6 +117,36 @@ class BatteryStatsCalculatorTest {
         assertEquals("3m 42s (0.3%)", com.nlab.sysbattery.service.BatteryMonitorService.formatTimeDrop(222_000L, 0.34))
         assertEquals("4.70% /hr", com.nlab.sysbattery.service.BatteryMonitorService.formatNotificationRate(4.7))
         assertEquals("0% /hr", com.nlab.sysbattery.service.BatteryMonitorService.formatNotificationRate(0.0))
+
+        val service = com.nlab.sysbattery.service.BatteryMonitorService()
+        val tele = com.nlab.sysbattery.service.BatteryMonitorService.SessionTelemetry(
+            activeDrainRateValue = 4.70,
+            idleDrainRateValue = 0.80,
+            activeLossPercent = 2.0,
+            idleLossPercent = 0.5,
+            deepSleepLossPercent = 0.2,
+            awakeLossPercent = 0.3,
+            screenOnMillis = 222_000L,
+            screenOffMillis = 26_000L,
+            deepSleepMillis = 18_000L,
+            awakeMillis = 8_000L,
+            deepSleepShare = 69.2,
+            awakeShare = 30.8
+        )
+        val payload = service.buildNotificationPayload(
+            sample = sample(0L, 80),
+            rates = null,
+            charging = false,
+            tele = tele,
+            showBatteryPercentage = true,
+            showChargingPower = true,
+            temperatureUnit = "Celsius (°C)",
+            idleWarningText = null
+        )
+        assertEquals("Screen on: 3m 42s (2%)", payload.screenOnLine)
+        assertEquals("Screen off: 26s (0.5%)", payload.screenOffLine)
+        assertEquals("Deep sleep: 18s (0.2%)", payload.deepSleepLine)
+        assertEquals("Awake: 8s (0.3%)", payload.awakeLine)
     }
 
     @Test
@@ -175,5 +205,16 @@ class BatteryStatsCalculatorTest {
                 elapsedMillis = 30L * 60_000L
             )
         )
+    }
+
+    @Test
+    fun milliAmpFuelGaugeAboveOneAmpNormalizesCorrectlyToMicroAmps() {
+        // Realme RMX3461 reports current_now in mA (e.g., -274, -872, -1250)
+        assertEquals(-274_000L, BatterySysfsReader.normalizeRawCurrentToMicroAmps(-274L))
+        assertEquals(-872_000L, BatterySysfsReader.normalizeRawCurrentToMicroAmps(-872L))
+        assertEquals(-1_250_000L, BatterySysfsReader.normalizeRawCurrentToMicroAmps(-1250L))
+        assertEquals(-850_000L, BatterySysfsReader.normalizeRawCurrentToMicroAmps(-850_000L))
+        assertEquals("0.03%", com.nlab.sysbattery.service.BatteryMonitorService.formatDropPercent(0.031))
+        assertEquals("0.01%", com.nlab.sysbattery.service.BatteryMonitorService.formatDropPercent(0.012))
     }
 }

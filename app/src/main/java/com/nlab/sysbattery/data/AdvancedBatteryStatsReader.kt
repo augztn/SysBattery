@@ -20,52 +20,33 @@ class AdvancedBatteryStatsReader(context: Context) {
         val foregroundMillis: Long
     )
 
-    data class AppEnergy(
-        val uid: Int,
-        val packageName: String?,
-        val consumedMah: Double
-    )
-
     data class Report(
-        val totalConsumedMah: Double?,
-        val apps: List<AppEnergy>,
         val usage: List<AppUsage>,
-        val batteryStatsError: String?
+        val batteryStatsNotice: String
     )
 
     fun read(windowMillis: Long = TimeUnit.HOURS.toMillis(24)): Report {
         val now = System.currentTimeMillis()
         val start = now - windowMillis.coerceAtLeast(TimeUnit.MINUTES.toMillis(1))
         val usage = readUsage(start, now)
-        val (total, energies, error) = readEnergy()
         return Report(
-            totalConsumedMah = total,
-            apps = energies,
             usage = usage,
-            batteryStatsError = error
+            batteryStatsNotice = readEnergyNotice()
         )
     }
 
-    private fun readEnergy(): Triple<Double?, List<AppEnergy>, String?> {
+    private fun readEnergyNotice(): String {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            return Triple(null, emptyList(), "BatteryUsageStats requires Android 12 or newer.")
+            return "BatteryUsageStats requires Android 12 or newer."
         }
         if (ContextCompat.checkSelfPermission(
                 appContext,
                 android.Manifest.permission.BATTERY_STATS
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            return Triple(
-                null,
-                emptyList(),
-                "Android restricts per-app power attribution on this build (BATTERY_STATS is privileged). Live battery readings and Usage Access data remain available."
-            )
+            return "Android restricts per-app power attribution on this build (BATTERY_STATS is privileged). Live battery readings and Usage Access data remain available."
         }
-        return Triple(
-            null,
-            emptyList(),
-            "Android blocks direct BatteryUsageStats reflection for third-party apps. Use Shizuku or Root in Settings to inspect system BatteryStats."
-        )
+        return "Android blocks direct BatteryUsageStats reflection for third-party apps. Use Shizuku or Root in Settings to inspect system BatteryStats."
     }
 
     private fun readUsage(start: Long, end: Long): List<AppUsage> {
