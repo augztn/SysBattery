@@ -34,13 +34,13 @@ The direction of current is vendor/kernel-dependent. The app should prefer Andro
 
 ## Polling and service behavior
 
-The recreation defaults to a configurable 10-second interval (bounded to 2–60 seconds). **This is an implementation choice, not a recovered original interval.** The foreground service starts only after user action and publishes live in-process state via `StateFlow`.
+The service defaults to a 1-second sampling interval (bounded to 1–60 seconds through its start API). There is no user-facing interval control. **This is an implementation choice, not a recovered original interval.** The service starts from the app while monitoring is enabled, and boot recovery restarts it only when the persisted monitor preference is enabled. Live state is published in-process via `StateFlow`.
 
 ## Known functional gaps
 
-This implementation persists raw timestamped battery telemetry locally, but does not yet provide per-app power attribution, reliable historical deep-sleep accounting, a historical chart backed by the database, wake-lock analysis, or component power estimates. Those require additional verified formulas/data sources and testing across devices.
+This implementation does not persist raw timestamped battery samples to SQLite. The chart uses in-memory samples for the current app process. Completed ACTIVE/IDLE session summaries are stored locally in SQLite with a seven-day retention window and a maximum of 250 records. Per-app power attribution, reliable historical deep-sleep accounting, wake-lock analysis, and component power estimates remain unimplemented and require verified data sources and device testing.
 
 
-## Persistent history added in SysBattery
+## Session history stored by SysBattery
 
-The monitor stores each observed sample in a local SQLite database with a timestamp, raw current, level, voltage, temperature, plug state, screen state, Android battery status, charge counter, available full-capacity value, and source metadata. Data is retained for up to 30 days. Missing readings are stored as SQL NULL; the store does not synthesize foreground-app, wake-lock, or component-energy values. The schema is based on common battery-history concepts observed in Battery Guru's DEX strings, not a claim that its private schema or calculation algorithm has been reproduced exactly.
+The app stores completed ACTIVE/IDLE discharge-session summaries in SQLite: session type, elapsed start/end timestamps, start/end battery levels, measured drop percentage, calculated rate, and the wall-clock time the session was recorded. Records are pruned after seven days and capped at 250. Raw per-sample telemetry is not stored in SQLite; the dashboard chart keeps a bounded in-memory sample list for the current app process. The session schema is an implementation choice, not a reproduction of another app's private database or calculation algorithm.
