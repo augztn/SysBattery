@@ -12,7 +12,7 @@ object RootBatteryStatsParser {
     private val estimatedPowerSectionEnd = Regex("""(?i)^(?:battery history|statistics since|history|per-app|per application)\b.*$""")
     private val capacity = Regex("""(?i)^\s*(?:battery )?capacity\s*[:=]\s*(.+?)\s*$""")
     private val discharge = Regex("""(?i)^\s*(discharge(?:d)?(?:\s+since.*)?|start clock time)\s*[:=]\s*(.+?)\s*$""")
-    private val screen = Regex("""(?i)^\s*(screen(?: on| off)? time|screen-on time|screen-off time|screen)\s*:\s*(.+?)\s*$""")
+    private val screen = Regex("""(?i)^\s*(screen(?: on| off)? time|screen-on time|screen-off time|screen)\s*:\s*((?:on|off)\b|.*\b[0-9]+(?:\.[0-9]+)?\s*(?:d|h|m|s)\b.*)\s*$""")
     private val uidLine = Regex("""(?i)^\s*(uid\s+[^:]+)\s*:\s*(.+?)\s*$""")
     private val componentEstimate = Regex("""(?i)^\s*(screen|cpu|bluetooth|camera|audio|video|mobile_radio|sensors|gnss|wifi|wakelock|ambient_display)\s*:\s*([0-9]+(?:\.[0-9]+)?)(?:\s+(.*))?$""")
     private val uidLeadingEstimate = Regex("""(?i)^\s*(uid\s+[^:]+)\s*:\s*([0-9]+(?:\.[0-9]+)?)(?:\s+(.*))?$""")
