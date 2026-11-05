@@ -150,13 +150,23 @@ class MainActivity : ComponentActivity() {
     private fun hasBatteryStatsPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.BATTERY_STATS) == PackageManager.PERMISSION_GRANTED
 
+    @Suppress("DEPRECATION")
     private fun hasUsageAccess(): Boolean {
         val appOps = getSystemService(AppOpsManager::class.java) ?: return false
-        return appOps.checkOpNoThrow(
-            AppOpsManager.OPSTR_GET_USAGE_STATS,
-            Process.myUid(),
-            packageName
-        ) == AppOpsManager.MODE_ALLOWED
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            appOps.unsafeCheckOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                Process.myUid(),
+                packageName
+            )
+        } else {
+            appOps.checkOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                Process.myUid(),
+                packageName
+            )
+        }
+        return mode == AppOpsManager.MODE_ALLOWED
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
