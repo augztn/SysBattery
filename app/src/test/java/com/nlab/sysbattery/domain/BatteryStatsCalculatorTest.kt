@@ -239,6 +239,14 @@ class BatteryStatsCalculatorTest {
     }
 
     @Test
+    fun measuredSessionDropNeverExceedsStartingBatteryLevel() {
+        val clamp = com.nlab.sysbattery.data.BatterySessionDbHelper::effectiveDropPercent
+        assertEquals(1.0, clamp(1, 1, 1.9), 0.0)
+        assertEquals(0.0, clamp(0, 0, 0.5), 0.0)
+        assertEquals(0.5, clamp(50, 0, 0.5), 0.0)
+    }
+
+    @Test
     fun differentialFormulaMatchesSpecificationExamples() {
         // #101 ACTIVE: 95% -> 92% over 18 minutes = 10.0%/h
         val s101 = com.nlab.sysbattery.data.BatterySessionDbHelper.calculateSessionRatePerHour(
