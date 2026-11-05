@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Diagnostic logs can contain device details and crash traces; keep them local-only. -->
+    <exclude domain="file" path="sysbattery.log" />
+    <exclude domain="file" path="sysbattery.log.1" />
+</full-backup-content>
