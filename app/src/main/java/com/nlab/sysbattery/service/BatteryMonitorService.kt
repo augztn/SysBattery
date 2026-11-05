@@ -253,6 +253,7 @@ class BatteryMonitorService : Service() {
         fun start(context: Context, intervalMs: Long = DEFAULT_INTERVAL_MS): Boolean {
             val appCtx = context.applicationContext
             val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().putBoolean(PREF_MONITOR_ENABLED, true).apply()
             val intent = Intent(appCtx, BatteryMonitorService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_INTERVAL_MS, intervalMs.coerceIn(1_000L, 60_000L))
@@ -263,7 +264,6 @@ class BatteryMonitorService : Service() {
                     appCtx.startService(intent)
                 }
                 check(component != null) { "BatteryMonitorService could not be resolved" }
-                prefs.edit().putBoolean(PREF_MONITOR_ENABLED, true).apply()
                 true
             }.getOrElse { e ->
                 prefs.edit().putBoolean(PREF_MONITOR_ENABLED, false).apply()
