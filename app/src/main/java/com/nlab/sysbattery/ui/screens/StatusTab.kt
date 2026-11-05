@@ -139,11 +139,16 @@ fun StatusTab(
         rates?.direction == BatteryStatsCalculator.Direction.CHARGING -> "Charging"
         rates?.batteryPercentPerHour != null -> String.format(Locale.getDefault(), "%.2f%%/h", rates.batteryPercentPerHour)
         sample != null && currentSigned != null && currentSigned < -1.0 -> {
-            val capMah = (sample.fullChargeCapacityMicroAmpHours
+            val capacityMah = (sample.fullChargeCapacityMicroAmpHours
                 ?: sample.estimatedFullChargeCapacityMicroAmpHours
-                ?: sample.designCapacityMicroAmpHours ?: 4_000_000L) / 1000.0
-            val liveRate = abs(currentSigned) * 100.0 / capMah
-            String.format(Locale.getDefault(), "%.2f%%/h", liveRate)
+                ?: sample.designCapacityMicroAmpHours)
+                ?.takeIf { it in 100_000L..30_000_000L }
+                ?.div(1_000.0)
+            val liveRate = capacityMah?.takeIf { it > 0.0 }
+                ?.let { abs(currentSigned) * 100.0 / it }
+            liveRate?.takeIf { it.isFinite() }?.let {
+                String.format(Locale.getDefault(), "%.2f%%/h", it)
+            } ?: "Capacity unavailable"
         }
         else -> session.activeDrainRate
     }
