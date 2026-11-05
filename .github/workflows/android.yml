@@ -24,7 +24,11 @@ jobs:
       - name: Run unit tests
         run: gradle testDebugUnitTest
       - name: Run Android lint
-        run: gradle lintDebug
+        run: |
+          gradle lintDebug || {
+            cat app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt
+            exit 1
+          }
       - name: Build debug APK
         run: gradle assembleDebug
       - name: Upload debug APK
