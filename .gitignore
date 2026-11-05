@@ -12,3 +12,6 @@
 # Local IDE/build output
 /.kotlin/
 /.aistudio/artifacts/
+
+# Local device diagnostic exports
+/public/assets/aistudio/*diagnostics*.txt
