@@ -251,21 +251,25 @@ class BatteryMonitorService : Service() {
             }
         }
 
-        fun start(context: Context, intervalMs: Long = DEFAULT_INTERVAL_MS) {
+        fun start(context: Context, intervalMs: Long = DEFAULT_INTERVAL_MS): Boolean {
             val appCtx = context.applicationContext
-            appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-                .putBoolean(PREF_MONITOR_ENABLED, true).apply()
+            val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val intent = Intent(appCtx, BatteryMonitorService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_INTERVAL_MS, intervalMs.coerceIn(1_000L, 60_000L))
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return runCatching {
+                val component = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     appCtx.startForegroundService(intent)
                 } else {
                     appCtx.startService(intent)
                 }
-            }.onFailure { e ->
+                check(component != null) { "BatteryMonitorService could not be resolved" }
+                prefs.edit().putBoolean(PREF_MONITOR_ENABLED, true).apply()
+                true
+            }.getOrElse { e ->
+                prefs.edit().putBoolean(PREF_MONITOR_ENABLED, false).apply()
                 DiagnosticLogger.warn("Could not start BatteryMonitorService from current state", e)
+                false
             }
         }
 
@@ -555,6 +559,7 @@ class BatteryMonitorService : Service() {
             lastNotificationUpdateElapsedMs = SystemClock.elapsedRealtime()
         }.onFailure { e ->
             DiagnosticLogger.error("Unable to enter foreground state", e)
+            prefs.edit().putBoolean(PREF_MONITOR_ENABLED, false).apply()
             isRunningInForeground = false
             stopSelf(startId)
             return START_NOT_STICKY
