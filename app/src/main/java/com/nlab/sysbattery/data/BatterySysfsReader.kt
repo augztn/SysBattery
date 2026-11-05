@@ -133,12 +133,19 @@ class BatterySysfsReader(context: Context) {
             .safeInt("design_capacity_mah", 0)
             .takeIf { it in 500..20_000 }
             ?.let { it * 1_000L }
-        val fallbackCapacity = if (fullChargeCapacity == null && sysfsDesignCapacity == null && configuredDesignCapacity == null) {
-            (if (chargeCounter != null && level != null && level in 15..100) {
-                (chargeCounter * 100L / level).takeIf { it in 1_500_000L..25_000_000L }
-            } else null) ?: 5_000_000L
+        // Do not assume a generic battery size: a fabricated 5,000 mAh value makes
+        // current-derived drain rates look measured when the device exposes no capacity.
+        val chargeCounterEstimate = if (
+            fullChargeCapacity == null &&
+            sysfsDesignCapacity == null &&
+            configuredDesignCapacity == null &&
+            chargeCounter != null &&
+            level != null &&
+            level in 15..100
+        ) {
+            (chargeCounter * 100L / level).takeIf { it in 1_500_000L..25_000_000L }
         } else null
-        val designCapacity = sysfsDesignCapacity ?: configuredDesignCapacity ?: fallbackCapacity
+        val designCapacity = sysfsDesignCapacity ?: configuredDesignCapacity ?: chargeCounterEstimate
         val systemCycleCount = if (Build.VERSION.SDK_INT >= 34) {
             batteryIntent?.getIntExtra(BatteryManager.EXTRA_CYCLE_COUNT, -1)?.takeIf { it >= 0 }
         } else null
