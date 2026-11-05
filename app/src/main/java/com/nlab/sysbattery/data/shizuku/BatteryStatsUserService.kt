@@ -1,6 +1,8 @@
 package com.nlab.sysbattery.data.shizuku
 
 import android.os.RemoteException
+import com.nlab.sysbattery.data.terminateProcess
+import com.nlab.sysbattery.data.waitForProcessExit
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.util.concurrent.FutureTask
@@ -41,20 +43,20 @@ class BatteryStatsUserService : IBatteryStatsUserService.Stub() {
         }
 
         return try {
-            if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
+            val exitCode = waitForProcessExit(process, TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            if (exitCode == null) {
                 outputTask.cancel(true)
                 "ERROR: BatteryStats command timed out."
             } else {
                 val output = outputTask.get(2, TimeUnit.SECONDS)
-                if (process.exitValue() != 0) {
-                    "ERROR: dumpsys batterystats exited ${process.exitValue()}: ${output.take(500)}"
+                if (exitCode != 0) {
+                    "ERROR: dumpsys batterystats exited $exitCode: ${output.take(500)}"
                 } else {
                     output
                 }
             }
         } catch (e: Exception) {
-            process.destroyForcibly()
+            terminateProcess(process)
             outputTask.cancel(true)
             "ERROR: ${e.javaClass.simpleName}: ${e.message ?: "BatteryStats query failed"}"
         }
