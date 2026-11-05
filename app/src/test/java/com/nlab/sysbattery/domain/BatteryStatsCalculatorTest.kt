@@ -18,6 +18,23 @@ class BatteryStatsCalculatorTest {
         )
 
     @Test
+    fun currentDerivedRateIsUnavailableWithoutRealOrConfiguredCapacity() {
+        val current = sample(0L, 80, 4_000_000L).copy(
+            currentMicroAmps = -274_000L,
+            designCapacityMicroAmpHours = null,
+            fullChargeCapacityMicroAmpHours = null,
+            estimatedFullChargeCapacityMicroAmpHours = null
+        )
+        val result = BatteryStatsCalculator.calculateWindowed(
+            samples = listOf(BatteryStatsCalculator.TimedSample(0L, 80, -274_000L, 4_000_000L)),
+            current = current,
+            isCharging = false
+        )
+        assertNull(result.batteryPercentPerHour)
+        assertEquals(274.0, result.currentMilliAmpsMagnitude!!, 0.01)
+    }
+
+    @Test
     fun chargingPercentageIncreaseIsNotReportedAsDrain() {
         val result = BatteryStatsCalculator.calculate(
             previous = BatteryStatsCalculator.PreviousSample(0L, 40, -500_000L, 2_000_000L),
