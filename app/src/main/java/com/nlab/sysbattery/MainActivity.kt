@@ -10,7 +10,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
-import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
 import android.widget.Toast
@@ -453,17 +452,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openBackgroundSettings() {
-        val powerManager = getSystemService(PowerManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && powerManager?.isIgnoringBatteryOptimizations(packageName) != true) {
-            try {
-                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = Uri.parse("package:$packageName")
-                })
-                return
-            } catch (_: Exception) {
-            }
-        }
         try {
+            // Open the system list instead of directly requesting a Doze exemption.
+            // The user chooses whether to exempt SysBattery from battery optimization.
             startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         } catch (_: Exception) {
             try {
