@@ -725,8 +725,7 @@ class BatteryMonitorService : Service() {
                 val maxPlausibleOffLoss = (offElapsed / 3_600_000.0 * 35.0).coerceIn(0.01, 5.0)
                 val counterOffLoss = if (
                     onElapsed < 2_000L && offElapsed >= 15_000L &&
-                    capacityUah != null && counterDeltaUah != null &&
-                    counterDeltaUah in 1L..100_000L
+                    counterDeltaUah != null && counterDeltaUah in 1L..100_000L
                 ) {
                     (counterDeltaUah.toDouble() / capacityUah.toDouble() * 100.0)
                         .takeIf { it.isFinite() && it in 0.0..maxPlausibleOffLoss }
