@@ -85,7 +85,9 @@ class MainActivity : ComponentActivity() {
 
     private val exportDiagnostics = registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         if (uri != null) runCatching {
-            contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(DiagnosticLogger.readLogs()) }
+            val outputStream = contentResolver.openOutputStream(uri)
+                ?: error("Could not open the selected export destination")
+            outputStream.bufferedWriter().use { it.write(DiagnosticLogger.readLogs()) }
             Toast.makeText(this, "Diagnostics exported", Toast.LENGTH_SHORT).show()
         }.onFailure {
             DiagnosticLogger.error("Diagnostics export failed", it)
