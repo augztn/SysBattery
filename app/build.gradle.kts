@@ -24,22 +24,14 @@ android {
         versionCode = 2
         versionName = "1.1.0"
     }
-    signingConfigs {
-        create("debugConfig") {
-            storeFile = file("${rootDir}/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
-    }
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("debugConfig")
+            // Use AGP's standard per-user debug keystore; never require a repo-local key.
         }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("debugConfig")
+            // Release signing is intentionally supplied by the release environment.
         }
     }
 }
