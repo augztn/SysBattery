@@ -146,9 +146,7 @@ class BatterySysfsReader(context: Context) {
             )
         )?.toInt()?.takeIf { it >= 0 }
 
-        if (level == 100 && chargeCounter != null && chargeCounter in 1_000_000L..30_000_000L &&
-            current != null && abs(current) in 1_000L..25_000_000L
-        ) {
+        if (shouldUpdateEstimatedFullChargeCapacity(level, chargeCounter, current)) {
             estimatePrefs.edit().putLong("estimated_full_charge_capacity_uah", chargeCounter).apply()
         }
         val estimatedFullChargeCapacity = estimatePrefs
@@ -205,7 +203,19 @@ class BatterySysfsReader(context: Context) {
     }
 
     companion object {
+        internal fun shouldUpdateEstimatedFullChargeCapacity(
+            levelPercent: Int?,
+            chargeCounterMicroAmpHours: Long?,
+            currentMicroAmps: Long?
+        ): Boolean {
+            if (levelPercent != 100) return false
+            if (chargeCounterMicroAmpHours !in 1_000_000L..30_000_000L) return false
+            val current = currentMicroAmps ?: return false
+            return current in -25_000L..-1_000L || current in 1_000L..25_000L
+        }
+
         fun normalizeRawCurrentToMicroAmps(raw: Long, sourceKnownMicroAmps: Boolean = false): Long {
+            if (raw == Long.MIN_VALUE) return 0L
             val magnitude = abs(raw)
             if (magnitude <= 1L) return 0L
             if (magnitude > 20_000L || sourceKnownMicroAmps) return raw
