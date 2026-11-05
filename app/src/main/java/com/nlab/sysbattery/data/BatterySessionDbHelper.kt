@@ -114,15 +114,11 @@ class BatterySessionDbHelper private constructor(context: Context) :
             return false
         }
 
-        val effectiveDrop = when {
-            measuredSubPercentDrop != null && measuredSubPercentDrop.isFinite() && measuredSubPercentDrop > 0.0 -> {
-                val minBound = (integerDrop - 0.99).coerceAtLeast(0.0)
-                val maxBound = minOf(integerDrop + 0.99, startBatteryLevel.toDouble())
-                measuredSubPercentDrop.coerceIn(minBound, maxBound)
-            }
-            integerDrop > 0 -> integerDrop.toDouble()
-            else -> 0.0
-        }
+        val effectiveDrop = effectiveDropPercent(
+            startBatteryLevel = startBatteryLevel,
+            integerDrop = integerDrop,
+            measuredSubPercentDrop = measuredSubPercentDrop
+        )
 
         val ratePerHour = calculateSessionRatePerHour(
             startBatteryPercent = startBatteryLevel.toDouble(),
@@ -289,6 +285,24 @@ class BatterySessionDbHelper private constructor(context: Context) :
             instance ?: synchronized(this) {
                 instance ?: BatterySessionDbHelper(context.applicationContext).also { instance = it }
             }
+
+        internal fun effectiveDropPercent(
+            startBatteryLevel: Int,
+            integerDrop: Int,
+            measuredSubPercentDrop: Double?
+        ): Double {
+            val maxDrop = startBatteryLevel.coerceIn(0, 100).toDouble()
+            val boundedIntegerDrop = integerDrop.coerceIn(0, maxDrop.toInt())
+            if (measuredSubPercentDrop != null &&
+                measuredSubPercentDrop.isFinite() &&
+                measuredSubPercentDrop > 0.0
+            ) {
+                val minBound = (boundedIntegerDrop - 0.99).coerceAtLeast(0.0)
+                val maxBound = minOf(boundedIntegerDrop + 0.99, maxDrop)
+                return measuredSubPercentDrop.coerceIn(minBound, maxBound)
+            }
+            return boundedIntegerDrop.toDouble()
+        }
 
         /**
          * Differential Drain Formula:
