@@ -69,6 +69,7 @@ import com.nlab.sysbattery.ui.screens.AppUsageTab
 import com.nlab.sysbattery.ui.screens.SettingsTab
 import com.nlab.sysbattery.ui.screens.StatusTab
 import com.nlab.sysbattery.ui.theme.SysBatteryTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -227,7 +228,8 @@ class MainActivity : ComponentActivity() {
                 if (!shizukuLoading) {
                     shizukuLoading = true
                     coroutineScope.launch {
-                        val (report, findings, errorMsg) = withContext(Dispatchers.IO) {
+                        try {
+                            val (report, findings, errorMsg) = withContext(Dispatchers.IO) {
                             var shizukuItems = emptyList<RootBatteryStatsParser.Finding>()
                             var shizukuErr: String? = null
                             val canUseShizuku = runCatching {
@@ -256,10 +258,17 @@ class MainActivity : ComponentActivity() {
                             }
                             Triple(advReport, shizukuItems, combinedError)
                         }
-                        advancedReport = report
-                        shizukuFindings = findings
-                        advancedError = errorMsg
-                        shizukuLoading = false
+                            advancedReport = report
+                            shizukuFindings = findings
+                            advancedError = errorMsg
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            DiagnosticLogger.error("Advanced telemetry refresh failed", e)
+                            advancedError = "Could not refresh telemetry: ${e.javaClass.simpleName}"
+                        } finally {
+                            shizukuLoading = false
+                        }
                     }
                 }
             }
@@ -406,11 +415,18 @@ class MainActivity : ComponentActivity() {
                                             if (!rootLoading) {
                                                 rootLoading = true
                                                 coroutineScope.launch {
-                                                    val report = withContext(Dispatchers.IO) {
-                                                        RootAccessReader().read()
+                                                    try {
+                                                        rootReport = withContext(Dispatchers.IO) {
+                                                            RootAccessReader().read()
+                                                        }
+                                                    } catch (e: CancellationException) {
+                                                        throw e
+                                                    } catch (e: Exception) {
+                                                        DiagnosticLogger.error("Root diagnostics refresh failed", e)
+                                                        Toast.makeText(this@MainActivity, "Root diagnostics failed", Toast.LENGTH_SHORT).show()
+                                                    } finally {
+                                                        rootLoading = false
                                                     }
-                                                    rootReport = report
-                                                    rootLoading = false
                                                 }
                                             }
                                         },
@@ -488,13 +504,12 @@ class MainActivity : ComponentActivity() {
             Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         }.getOrDefault(false)
         shizukuStatus = when {
+            !binderAlive -> if (available) "Shizuku installed · service not running" else "Shizuku not installed · optional"
+            !shizukuAuthorized -> "Shizuku running · permission needed"
             shizukuService != null -> "Authorized · BatteryStats service connected"
             shizukuServiceBinding -> "Authorized · connecting to BatteryStats service"
-            shizukuServiceBound && shizukuAuthorized -> "Authorized · reconnecting to BatteryStats service"
-            shizukuAuthorized -> "Authorized · connecting to BatteryStats service"
-            binderAlive -> "Shizuku running · permission needed"
-            available -> "Shizuku installed · service not running"
-            else -> "Shizuku not installed · optional"
+            shizukuServiceBound -> "Authorized · reconnecting to BatteryStats service"
+            else -> "Authorized · connecting to BatteryStats service"
         }
         if (shizukuAuthorized && shizukuService == null && !shizukuServiceBound) bindShizukuService()
     }
