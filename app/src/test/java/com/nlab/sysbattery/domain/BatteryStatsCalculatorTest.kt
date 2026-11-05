@@ -225,6 +225,23 @@ class BatteryStatsCalculatorTest {
     }
 
     @Test
+    fun currentRateRemainsUnavailableWhenCapacityIsMissing() {
+        val current = sample(30_000L, 80).copy(
+            currentMicroAmps = -500_000L,
+            fullChargeCapacityMicroAmpHours = null,
+            estimatedFullChargeCapacityMicroAmpHours = null,
+            designCapacityMicroAmpHours = null
+        )
+        val result = BatteryStatsCalculator.calculateWindowed(
+            samples = listOf(BatteryStatsCalculator.TimedSample(30_000L, 80, -500_000L, null)),
+            current = current,
+            isCharging = false
+        )
+        assertEquals(500.0, result.currentMilliAmpsMagnitude!!, 0.01)
+        assertNull(result.batteryPercentPerHour)
+    }
+
+    @Test
     fun milliAmpFuelGaugeAboveOneAmpNormalizesCorrectlyToMicroAmps() {
         // Realme RMX3461 reports current_now in mA (e.g., -274, -872, -1250)
         assertEquals(-274_000L, BatterySysfsReader.normalizeRawCurrentToMicroAmps(-274L))
