@@ -86,6 +86,6 @@ class RootAccessReader {
 }
 
 
-private val ROOT_UID_PATTERN = Regex("""(?:^|\\s)uid=0(?:\\s|\\(|$)""")
+private val ROOT_UID_PATTERN = Regex("""(?:^|\s)uid=0(?:\s|\(|$)""")
 
 internal fun hasRootUid(identity: String): Boolean = ROOT_UID_PATTERN.containsMatchIn(identity)
