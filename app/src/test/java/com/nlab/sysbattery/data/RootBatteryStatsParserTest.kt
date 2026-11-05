@@ -34,6 +34,9 @@ class RootBatteryStatsParserTest {
         val componentFindings = findings.filter { it.label == "Component estimate (mAh)" }
         assertEquals(1, componentFindings.size)
         assertTrue(componentFindings.single().value.startsWith("screen: 427"))
+        org.junit.Assert.assertFalse(findings.any {
+            it.label == "Screen time/state" && it.value.contains("screen: 1")
+        })
     }
 
     @Test fun parsesWakeLockAndHistoryEvents() {
