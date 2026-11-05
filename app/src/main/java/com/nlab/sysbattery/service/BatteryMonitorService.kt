@@ -700,55 +700,43 @@ class BatteryMonitorService : Service() {
             val currentCounter = sample.chargeCounterMicroAmpHours
             val capacityUah = (sample.fullChargeCapacityMicroAmpHours
                 ?: sample.estimatedFullChargeCapacityMicroAmpHours
-                ?: sample.designCapacityMicroAmpHours
-                ?: 4_000_000L)
-                .takeIf { it in 100_000L..30_000_000L } ?: 4_000_000L
-            val capacityMah = capacityUah.toDouble() / 1_000.0
+                ?: sample.designCapacityMicroAmpHours)
+                ?.takeIf { it in 100_000L..30_000_000L }
+            val capacityMah = capacityUah?.div(1_000.0)
 
             val currentMa = sample.currentMicroAmps?.let { abs(it) / 1_000.0 }
                 ?.takeIf { it.isFinite() && it in 1.0..15_000.0 }
 
-            val rawOnLoss = if (onElapsed > 0L) {
-                val activeMa = currentMa ?: 300.0
-                (activeMa * (onElapsed / 3_600_000.0) / capacityMah * 100.0)
+            // Derive loss only from observed current and a real capacity reading.
+            val rawOnLoss = if (onElapsed > 0L && currentMa != null && capacityMah != null) {
+                (currentMa * (onElapsed / 3_600_000.0) / capacityMah * 100.0)
                     .takeIf { it.isFinite() && it in 0.0..5.0 } ?: 0.0
             } else 0.0
 
-            val totalOffSoFar = synchronized(screenStateLock) { screenOffMillis }
-            val (rawSleepLoss, rawAwakeLoss) = if (offElapsed > 0L) {
-                val sleepMa = ((currentMa ?: 180.0) * 0.08).coerceIn(12.0, 28.0)
-                // Use live fuel-gauge current during Awake; only clamp the first 2 seconds after screen-off
-                // to prevent screen-on backlight current from spiking a 1-second screen lock.
-                val maxAwakeMa = if (totalOffSoFar < 2_500L) 220.0 else 1_200.0
-                val awakeMa = (currentMa ?: 180.0).coerceIn(45.0, maxAwakeMa)
-
-                val calcSleep = (sleepMa * (sleepElapsed / 3_600_000.0) / capacityMah * 100.0)
-                    .takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
-                val calcAwake = (awakeMa * (awakeElapsed / 3_600_000.0) / capacityMah * 100.0)
-                    .takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
-                val calcTotalOff = calcSleep + calcAwake
-
+            val (rawSleepLoss, rawAwakeLoss) = if (
+                offElapsed > 0L && currentMa != null && capacityMah != null
+            ) {
+                // Current is a single aggregate interval reading; allocate measured interval
+                // energy by observed sleep/awake duration instead of guessing separate currents.
+                val measuredOffLoss = (
+                    currentMa * (offElapsed / 3_600_000.0) / capacityMah * 100.0
+                ).takeIf { it.isFinite() && it in 0.0..5.0 } ?: 0.0
                 val counterDeltaUah = if (previousCounter != null && currentCounter != null) {
                     previousCounter - currentCounter
                 } else null
                 val maxPlausibleOffLoss = (offElapsed / 3_600_000.0 * 35.0).coerceIn(0.01, 5.0)
                 val counterOffLoss = if (
-                    onElapsed < 2_000L &&
-                    offElapsed >= 15_000L &&
-                    counterDeltaUah != null &&
+                    onElapsed < 2_000L && offElapsed >= 15_000L &&
+                    capacityUah != null && counterDeltaUah != null &&
                     counterDeltaUah in 1L..100_000L
                 ) {
                     (counterDeltaUah.toDouble() / capacityUah.toDouble() * 100.0)
                         .takeIf { it.isFinite() && it in 0.0..maxPlausibleOffLoss }
                 } else null
-
-                if (counterOffLoss != null && calcTotalOff > 0.0) {
-                    val sleepRatio = (calcSleep / calcTotalOff).coerceIn(0.0, 1.0)
-                    val sLoss = counterOffLoss * sleepRatio
-                    Pair(sLoss, (counterOffLoss - sLoss).coerceAtLeast(0.0))
-                } else {
-                    Pair(calcSleep, calcAwake)
-                }
+                val totalOffLoss = counterOffLoss ?: measuredOffLoss
+                val sleepRatio = (sleepElapsed.toDouble() / offElapsed.toDouble()).coerceIn(0.0, 1.0)
+                val sleepLoss = totalOffLoss * sleepRatio
+                Pair(sleepLoss, (totalOffLoss - sleepLoss).coerceAtLeast(0.0))
             } else Pair(0.0, 0.0)
 
             val rawOffLoss = rawSleepLoss + rawAwakeLoss
@@ -1186,8 +1174,8 @@ class BatteryMonitorService : Service() {
                     ?.takeIf { it.isFinite() && it in 1.0..15_000.0 }
                 val capMah = (sample?.fullChargeCapacityMicroAmpHours
                     ?: sample?.estimatedFullChargeCapacityMicroAmpHours
-                    ?: sample?.designCapacityMicroAmpHours
-                    ?: 4_000_000L).takeIf { it in 100_000L..30_000_000L }?.div(1_000.0)
+                    ?: sample?.designCapacityMicroAmpHours)
+                    ?.takeIf { it in 100_000L..30_000_000L }?.div(1_000.0)
                 if (currentMa != null && capMah != null && capMah > 0.0) {
                     (currentMa * 100.0 / capMah).takeIf { it.isFinite() && it in 0.01..200.0 }
                 } else null
