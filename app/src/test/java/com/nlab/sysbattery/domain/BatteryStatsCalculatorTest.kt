@@ -239,6 +239,27 @@ class BatteryStatsCalculatorTest {
     }
 
     @Test
+    fun rollingSessionTotalsIncludeOnlyTheOverlapWithTheLast24Hours() {
+        val oneDayMs = 24L * 60L * 60L * 1_000L
+        val contribution = com.nlab.sysbattery.data.BatterySessionDbHelper.clipSessionToWindow(
+            sessionStartEpochMs = 0L,
+            sessionEndEpochMs = 2L * oneDayMs,
+            dropPercent = 8.0,
+            windowStartEpochMs = oneDayMs,
+            windowEndEpochMs = 2L * oneDayMs
+        )
+        assertEquals(4.0, contribution!!.first, 0.001)
+        assertEquals(oneDayMs, contribution.second)
+        assertNull(com.nlab.sysbattery.data.BatterySessionDbHelper.clipSessionToWindow(
+            sessionStartEpochMs = 0L,
+            sessionEndEpochMs = oneDayMs,
+            dropPercent = 5.0,
+            windowStartEpochMs = oneDayMs,
+            windowEndEpochMs = 2L * oneDayMs
+        ))
+    }
+
+    @Test
     fun measuredSessionDropNeverExceedsStartingBatteryLevel() {
         assertEquals(1.0, com.nlab.sysbattery.data.BatterySessionDbHelper.effectiveDropPercent(1, 1, 1.9), 0.0)
         assertEquals(0.0, com.nlab.sysbattery.data.BatterySessionDbHelper.effectiveDropPercent(0, 0, 0.5), 0.0)
