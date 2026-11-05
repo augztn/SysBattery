@@ -152,7 +152,7 @@ fun SettingsTab(
                 subtitle = "Keep background monitoring active across sleep cycles"
             )
             Text(
-                text = "Aggressive OEM battery management (MIUI/HyperOS, ColorOS, OxygenOS, One UI) may pause background monitors. Set battery optimization for SysBattery to 'Unrestricted' for uninterrupted logging.",
+                text = "Aggressive OEM battery management (MIUI/HyperOS, ColorOS, OxygenOS, One UI) may pause background monitors. Open Android's Battery optimization settings and exempt SysBattery if uninterrupted logging is important on your device.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall
             )
