@@ -1,6 +1,7 @@
 package com.nlab.sysbattery.data
 
 import android.os.Build
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -26,6 +27,14 @@ internal fun waitForProcessExit(
         terminateProcess(process)
         waitTask.cancel(true)
         null
+    } catch (e: InterruptedException) {
+        terminateProcess(process)
+        waitTask.cancel(true)
+        Thread.currentThread().interrupt()
+        throw e
+    } catch (e: ExecutionException) {
+        terminateProcess(process)
+        throw e
     }
 }
 
