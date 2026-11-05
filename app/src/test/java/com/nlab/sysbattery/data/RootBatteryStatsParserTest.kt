@@ -18,6 +18,21 @@ class RootBatteryStatsParserTest {
         assertTrue(findings.any { it.label == "UID estimate (mAh)" && it.value.contains("u0a123") })
     }
 
+    @Test fun stopsComponentEstimatesWhenBatteryHistoryBegins() {
+        val findings = RootBatteryStatsParser.parse(
+            """
+            Estimated power use (mAh):
+              screen: 427 apps: 427
+            Battery History (1% used, 2h realtime):
+              screen: 1
+              cpu: 2
+            """.trimIndent()
+        )
+        val componentFindings = findings.filter { it.label == "Component estimate (mAh)" }
+        assertEquals(1, componentFindings.size)
+        assertTrue(componentFindings.single().value.startsWith("screen: 427"))
+    }
+
     @Test fun parsesWakeLockAndHistoryEvents() {
         val findings = RootBatteryStatsParser.parse(
             """
