@@ -1130,14 +1130,12 @@ class BatteryMonitorService : Service() {
         } else 0L
 
         val openEffectiveDrop = if (openActive && openStartLvl in 0..100 && currentLevel != null) {
-            val intDrop = (openStartLvl - currentLevel).coerceAtLeast(0)
-            if (openSubDrop > 0.0) {
-                val minBound = (intDrop - 0.99).coerceAtLeast(0.0)
-                val maxBound = minOf(intDrop + 0.99, openStartLvl.toDouble())
-                openSubDrop.coerceIn(minBound, maxBound)
-            } else {
-                intDrop.toDouble()
-            }
+            val integerDrop = (openStartLvl - currentLevel).coerceAtLeast(0)
+            BatterySessionDbHelper.effectiveDropPercent(
+                startBatteryLevel = openStartLvl,
+                integerDrop = integerDrop,
+                measuredSubPercentDrop = openSubDrop
+            )
         } else 0.0
 
         val openRateDouble = if (openActive && openDurationMs >= BatterySessionDbHelper.MIN_VALID_SESSION_MS) {
