@@ -1,3 +1,14 @@
+val releaseStoreFile = providers.environmentVariable("SYSBATTERY_RELEASE_STORE_FILE").orNull
+val releaseStorePassword = providers.environmentVariable("SYSBATTERY_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("SYSBATTERY_RELEASE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("SYSBATTERY_RELEASE_KEY_PASSWORD").orNull
+val releaseSigningValues = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
+val hasReleaseSigningValues = releaseSigningValues.any { !it.isNullOrBlank() }
+val hasCompleteReleaseSigning = releaseSigningValues.all { !it.isNullOrBlank() }
+if (hasReleaseSigningValues && !hasCompleteReleaseSigning) {
+    throw GradleException("Set all SYSBATTERY_RELEASE_* signing environment variables or leave all of them unset.")
+}
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -24,6 +35,16 @@ android {
         versionCode = 2
         versionName = "1.1.0"
     }
+    if (hasCompleteReleaseSigning) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         debug {
             // Use AGP's standard per-user debug keystore; never require a repo-local key.
@@ -31,7 +52,10 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            // Release signing is intentionally supplied by the release environment.
+            if (hasCompleteReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            // Without release credentials, assembleRelease intentionally produces an unsigned APK.
         }
     }
 }
