@@ -14,8 +14,8 @@ object RootBatteryStatsParser {
     private val discharge = Regex("""(?i)^\s*(discharge(?:d)?(?:\s+since.*)?|start clock time)\s*[:=]\s*(.+?)\s*$""")
     private val screen = Regex("""(?i)^\s*(screen(?: on| off)? time|screen-on time|screen-off time|screen)\s*:\s*(.+?)\s*$""")
     private val uidLine = Regex("""(?i)^\s*(uid\s+[^:]+)\s*:\s*(.+?)\s*$""")
-    private val componentEstimate = Regex("""(?i)^\s*(screen|cpu|bluetooth|camera|audio|video|mobile_radio|sensors|gnss|wifi|wakelock|ambient_display)\s*:\s*([0-9]+(?:\.[0-9]+)?)\b(.*)$""")
-    private val uidLeadingEstimate = Regex("""(?i)^\s*(uid\s+[^:]+)\s*:\s*([0-9]+(?:\.[0-9]+)?)\b(.*)$""")
+    private val componentEstimate = Regex("""(?i)^\s*(screen|cpu|bluetooth|camera|audio|video|mobile_radio|sensors|gnss|wifi|wakelock|ambient_display)\s*:\s*([0-9]+(?:\.[0-9]+)?)(?:\s+(.*))?$""")
+    private val uidLeadingEstimate = Regex("""(?i)^\s*(uid\s+[^:]+)\s*:\s*([0-9]+(?:\.[0-9]+)?)(?:\s+(.*))?$""")
     private val uidPower = Regex("""(?i)(?:^|[, (])(?:cpu|wifi|mobile radio|screen|camera|flashlight|bluetooth|gps|system|wake lock)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\s*m?ah\b""")
     private val wakeLock = Regex("""(?i)^\s*(?:wake lock|wakelock|partial wakelock)\s*[:=]?\s*(.+?)\s*$""")
     private val historyWakeLock = Regex("""(?i)(?:\+wake_lock=|wake_lock=|\+wakelock=)([^,\s]+)""")
@@ -43,8 +43,9 @@ object RootBatteryStatsParser {
             estimatedPower.find(line)?.let { add("Estimated power", it.groupValues[1]) }
 
             // The section heading supplies the mAh unit; component/UID rows often omit it.
+            val componentEstimateMatch = if (inEstimatedPowerSection) componentEstimate.find(line) else null
             if (inEstimatedPowerSection) {
-                componentEstimate.find(line)?.let {
+                componentEstimateMatch?.let {
                     add("Component estimate (mAh)", "${it.groupValues[1]}: ${it.groupValues[2]} (Android estimate)")
                 }
                 uidLeadingEstimate.find(line)?.let {
@@ -53,7 +54,9 @@ object RootBatteryStatsParser {
             }
             capacity.find(line)?.let { add("Battery capacity", it.groupValues[1]) }
             discharge.find(line)?.let { add("Discharge", "${it.groupValues[1]}: ${it.groupValues[2]}") }
-            screen.find(line)?.let { add("Screen time/state", "${it.groupValues[1]}: ${it.groupValues[2]}") }
+            if (componentEstimateMatch == null) {
+                screen.find(line)?.let { add("Screen time/state", "${it.groupValues[1]}: ${it.groupValues[2]}") }
+            }
 
             val uid = uidLine.find(line)
             if (uid != null && (line.contains("mah", ignoreCase = true) || line.contains("power", ignoreCase = true))) {
