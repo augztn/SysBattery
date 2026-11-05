@@ -4,11 +4,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.nlab.sysbattery.data.safeBoolean
+import com.nlab.sysbattery.diagnostics.DiagnosticLogger
 import com.nlab.sysbattery.service.BatteryMonitorService
 
 /** Restarts monitoring only when the user previously enabled it. */
 class MonitorRecoveryReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
+        DiagnosticLogger.initialize(context.applicationContext)
         val preferences = context.getSharedPreferences(
             BatteryMonitorService.PREFS_NAME,
             Context.MODE_PRIVATE
