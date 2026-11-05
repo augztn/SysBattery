@@ -54,7 +54,7 @@ Root access is optional. Denying it does not affect standard battery monitoring.
 
 ## Notes and limitations
 
-- The default sampling interval is 10 seconds.
+- The monitor samples every 1 second while running; Android's uptime-based coroutine delay pauses during deep sleep.
 - BatteryManager current/charge-counter values can be unsupported or vendor-dependent. Sysfs access is best-effort and often restricted on retail devices.
 - Shizuku can run a fixed, read-only `dumpsys batterystats --charged` query through its authorized user service. This is optional system-statistics access; it does not grant arbitrary protected sysfs access.
 - Device-specific full-charge capacity, state-of-health, and cycle-count metrics are not yet implemented. PlusPlusBattery demonstrates useful OPlus-specific FCC/SOH estimates and cycle-count history, but these require device-specific data sources and careful validation before inclusion.
