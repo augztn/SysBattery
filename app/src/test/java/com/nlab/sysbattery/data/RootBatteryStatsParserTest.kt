@@ -51,4 +51,11 @@ class RootBatteryStatsParserTest {
         assertEquals(2, RootBatteryStatsParser.parse("capacity: 4000\ncapacity: 4200", maxFindings = 2).size)
         assertEquals(1, RootBatteryStatsParser.parse("capacity: 4000\ncapacity: 4200", maxFindings = 1).size)
     }
+    @Test fun rootDetectionRequiresUidZeroNotJustGroupZero() {
+        assertTrue(hasRootUid("uid=0(root) gid=0(root) groups=0(root)"))
+        assertTrue(hasRootUid("uid=0 gid=2000"))
+        org.junit.Assert.assertFalse(hasRootUid("uid=2000(shell) gid=0(root)"))
+        org.junit.Assert.assertFalse(hasRootUid("uid=0123 gid=2000"))
+    }
+
 }
