@@ -31,7 +31,7 @@ Android and individual manufacturers can still stop background work, restrict no
 
 ## Build
 
-Open this repository in Android Studio with JDK 17 and Android SDK 35, or run `gradle assembleDebug` with Gradle 8.9 installed. The project uses Android Gradle Plugin 8.7.3, Kotlin 2.0.21, Jetpack Compose, and Material 3.
+Open this repository in Android Studio with JDK 17 and Android SDK 35 (compile SDK 35, target SDK 34, minimum SDK 24), or run `gradle assembleDebug` with Gradle 8.9 installed. The project uses Android Gradle Plugin 8.7.3, Kotlin 2.0.21, Jetpack Compose, and Material 3.
 
 For a signed release, set all four environment variables: `SYSBATTERY_RELEASE_STORE_FILE`, `SYSBATTERY_RELEASE_STORE_PASSWORD`, `SYSBATTERY_RELEASE_KEY_ALIAS`, and `SYSBATTERY_RELEASE_KEY_PASSWORD`. If they are not set, `gradle assembleRelease` builds an unsigned APK for validation; signing credentials are never committed to the repository.
 
