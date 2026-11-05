@@ -97,6 +97,7 @@ class MainActivity : ComponentActivity() {
 
     private var shizukuAuthorized by mutableStateOf(false)
     private var shizukuServiceBinding = false
+    private var shizukuServiceBound = false
     private var shizukuService: IBatteryStatsUserService? = null
 
     private val shizukuUserServiceArgs by lazy {
@@ -110,6 +111,7 @@ class MainActivity : ComponentActivity() {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             shizukuService = service?.let { IBatteryStatsUserService.Stub.asInterface(it) }
             shizukuServiceBinding = false
+            shizukuServiceBound = true
             runOnUiThread {
                 shizukuStatus = if (shizukuService != null) {
                     "Authorized · BatteryStats service connected"
@@ -121,9 +123,10 @@ class MainActivity : ComponentActivity() {
 
         override fun onServiceDisconnected(name: ComponentName?) {
             shizukuService = null
+            // A disconnected Android service remains bound and may reconnect automatically.
             shizukuServiceBinding = false
             runOnUiThread {
-                shizukuStatus = if (shizukuAuthorized) "Authorized · reconnect required" else "Shizuku disconnected"
+                shizukuStatus = if (shizukuAuthorized) "Authorized · reconnecting to BatteryStats service" else "Shizuku disconnected"
             }
         }
     }
@@ -475,11 +478,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         runCatching { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener) }
-        if (shizukuService != null || shizukuServiceBinding) {
+        if (shizukuServiceBound || shizukuServiceBinding) {
             runCatching { Shizuku.unbindUserService(shizukuUserServiceArgs, shizukuServiceConnection, true) }
         }
         shizukuService = null
         shizukuServiceBinding = false
+        shizukuServiceBound = false
         super.onDestroy()
     }
 
@@ -495,22 +499,24 @@ class MainActivity : ComponentActivity() {
         shizukuStatus = when {
             shizukuService != null -> "Authorized · BatteryStats service connected"
             shizukuServiceBinding -> "Authorized · connecting to BatteryStats service"
+            shizukuServiceBound && shizukuAuthorized -> "Authorized · reconnecting to BatteryStats service"
             shizukuAuthorized -> "Authorized · connecting to BatteryStats service"
             binderAlive -> "Shizuku running · permission needed"
             available -> "Shizuku installed · service not running"
             else -> "Shizuku not installed · optional"
         }
-        if (shizukuAuthorized && shizukuService == null) bindShizukuService()
+        if (shizukuAuthorized && shizukuService == null && !shizukuServiceBound) bindShizukuService()
     }
 
     private fun bindShizukuService() {
         val canBind = runCatching {
             Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         }.getOrDefault(false)
-        if (!canBind || shizukuService != null || shizukuServiceBinding) return
+        if (!canBind || shizukuService != null || shizukuServiceBinding || shizukuServiceBound) return
         shizukuServiceBinding = true
         try {
             Shizuku.bindUserService(shizukuUserServiceArgs, shizukuServiceConnection)
+            shizukuServiceBound = true
         } catch (e: Exception) {
             DiagnosticLogger.error("Failed to bind Shizuku BatteryStats service", e)
             shizukuServiceBinding = false
