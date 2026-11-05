@@ -48,7 +48,7 @@ These permissions are only access prerequisites. **They do not automatically cre
 
 ## Rooted-device support
 
-On rooted devices, the dashboard's **Check root & read system stats** action requests access through the installed `su` provider (for example, Magisk). Approve or deny that request in the superuser manager. If granted, SysBattery reads the output of the read-only commands `dumpsys batterystats --charged` and `dumpsys power` for diagnostics. The command output is capped before it is shown in the UI.
+On rooted devices, the dashboard's **Check root & read system stats** action requests access through the installed `su` provider (for example, Magisk). Approve or deny that request in the superuser manager. If granted, SysBattery reads the output of the read-only commands `dumpsys batterystats --charged` and `dumpsys batterystats --history` for diagnostics. Commands have a timeout and bounded output.
 
 Root access is optional. Denying it does not affect standard battery monitoring. This first root backend exposes system diagnostics; it does not yet parse every vendor's battery-history format into validated deep-sleep percentages, wake-lock summaries or per-app mAh charts. Those metrics must be parsed from the device's actual output and checked against known system reports before being presented as calculated results.
 
@@ -56,7 +56,7 @@ Root access is optional. Denying it does not affect standard battery monitoring.
 
 - The default sampling interval is 10 seconds.
 - BatteryManager current/charge-counter values can be unsupported or vendor-dependent. Sysfs access is best-effort and often restricted on retail devices.
-- The Shizuku button currently checks/request permission only; privileged Shizuku-backed sysfs reading is **not implemented yet**. Permission alone does not grant access to protected nodes.
+- Shizuku can run a fixed, read-only `dumpsys batterystats --charged` query through its authorized user service. This is optional system-statistics access; it does not grant arbitrary protected sysfs access.
 - Device-specific full-charge capacity, state-of-health, and cycle-count metrics are not yet implemented. PlusPlusBattery demonstrates useful OPlus-specific FCC/SOH estimates and cycle-count history, but these require device-specific data sources and careful validation before inclusion.
 - Per-app power attribution, reliable historical deep-sleep accounting, and component power estimates are not implemented. Raw timestamped battery samples are persisted locally, but no historical chart/query screen consumes that database yet.
 - The glass effect uses translucent surfaces and gradients rather than platform-specific backdrop blur, keeping the UI compatible across Android skins.
@@ -74,7 +74,7 @@ On One UI and other OEM builds, an inaccessible sysfs node is a permission/devic
 ## Measurement sources and estimates
 
 - **Current and power:** Android's `BatteryManager.BATTERY_PROPERTY_CURRENT_NOW` is reported in microamps by the standard API. SysBattery converts this to mA and estimates battery power from the measured current magnitude and battery-cell voltage; current/power signs are displayed from Android's charging status. Vendor drivers can still expose missing or incorrect readings, so implausible values are filtered.
-- **Drain rate:** A persisted, direction-specific ten-minute sample window is used. A current-based rate is shown only after a minimum of three plausible samples spanning at least 45 seconds and when a measured/estimated full-charge capacity is available. Otherwise, the app falls back to a battery-level trend only after a three-minute window.
+- **Drain rate:** A persisted, direction-specific ten-minute sample window is used. A current-derived rate can be calculated when a plausible current and a measured or explicitly estimated full-charge capacity are available. Without capacity, the app does not invent a generic battery size; it falls back to a battery-level trend only after a three-minute window. The rate is an estimate and should be compared with device-specific measurements.
 - **Full-charge capacity and health:** Read-only sysfs `charge_full` and `charge_full_design` paths are used only if the app UID can read them. A separately labelled full-charge-capacity estimate is saved only when the phone reports 100% and current magnitude is at most 25 mA. An estimated health percentage requires a design capacity; if Android/vendor data does not expose it, enter the rated capacity under Monitor settings. It is an estimate, not a manufacturer-certified state-of-health result.
 - **Cycle count and health status:** Read from the Android battery broadcast on supported Android versions and from common readable sysfs paths where available. Devices that do not expose these values show “Not reported”; the app does not fabricate them.
 - **Screen-on/off statistics:** Time is accumulated at screen-state transitions while the monitor service is running, and drain is attributed according to measured screen-on/off duration between samples. If Android force-stops the process, the OEM kills it, or the device restarts, an ordinary app cannot reconstruct all unobserved intervals exactly. Privileged system BatteryStats history may provide better historical data where access is granted.
