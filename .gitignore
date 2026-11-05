@@ -8,3 +8,7 @@
 /captures/
 .externalNativeBuild/
 .cxx/
+
+# Local IDE/build output
+/.kotlin/
+/.aistudio/artifacts/
