@@ -172,24 +172,36 @@ class BatterySessionDbHelper private constructor(context: Context) :
             db.rawQuery(
                 """
                 SELECT $COL_SESSION_TYPE,
-                       SUM($COL_DROP_PERCENT),
-                       SUM($COL_END_TS - $COL_START_TS)
+                       $COL_DROP_PERCENT,
+                       $COL_START_TS,
+                       $COL_END_TS,
+                       $COL_RECORDED_EPOCH
                 FROM $TABLE_SESSIONS
-                WHERE $COL_RECORDED_EPOCH >= ?
-                GROUP BY $COL_SESSION_TYPE
+                WHERE $COL_RECORDED_EPOCH >= ? AND $COL_RECORDED_EPOCH <= ?
                 """.trimIndent(),
-                arrayOf(cutoffEpochMs.toString())
+                arrayOf(cutoffEpochMs.toString(), nowEpochMs.toString())
             ).use { cursor ->
                 while (cursor.moveToNext()) {
                     val type = SessionType.fromDb(cursor.getString(0))
-                    val drop = cursor.getDouble(1).coerceAtLeast(0.0)
-                    val duration = cursor.getLong(2).coerceAtLeast(0L)
+                    val drop = cursor.getDouble(1)
+                    val startElapsed = cursor.getLong(2)
+                    val endElapsed = cursor.getLong(3)
+                    val recordedEpoch = cursor.getLong(4)
+                    val sessionDuration = endElapsed - startElapsed
+                    val sessionStartEpoch = recordedEpoch - sessionDuration
+                    val contribution = clipSessionToWindow(
+                        sessionStartEpochMs = sessionStartEpoch,
+                        sessionEndEpochMs = recordedEpoch,
+                        dropPercent = drop,
+                        windowStartEpochMs = cutoffEpochMs,
+                        windowEndEpochMs = nowEpochMs
+                    ) ?: continue
                     if (type == SessionType.ACTIVE) {
-                        activeDrop = drop
-                        activeDuration = duration
+                        activeDrop += contribution.first
+                        activeDuration += contribution.second
                     } else {
-                        idleDrop = drop
-                        idleDuration = duration
+                        idleDrop += contribution.first
+                        idleDuration += contribution.second
                     }
                 }
             }
@@ -285,6 +297,23 @@ class BatterySessionDbHelper private constructor(context: Context) :
             instance ?: synchronized(this) {
                 instance ?: BatterySessionDbHelper(context.applicationContext).also { instance = it }
             }
+
+        internal fun clipSessionToWindow(
+            sessionStartEpochMs: Long,
+            sessionEndEpochMs: Long,
+            dropPercent: Double,
+            windowStartEpochMs: Long,
+            windowEndEpochMs: Long
+        ): Pair<Double, Long>? {
+            val sessionDuration = sessionEndEpochMs - sessionStartEpochMs
+            if (sessionDuration <= 0L || !dropPercent.isFinite() || dropPercent < 0.0) return null
+            val overlapStart = sessionStartEpochMs.coerceAtLeast(windowStartEpochMs)
+            val overlapEnd = sessionEndEpochMs.coerceAtMost(windowEndEpochMs)
+            val overlapDuration = (overlapEnd - overlapStart).coerceAtLeast(0L)
+            if (overlapDuration == 0L) return null
+            val overlapDrop = dropPercent * overlapDuration.toDouble() / sessionDuration.toDouble()
+            return overlapDrop.takeIf { it.isFinite() }?.let { it to overlapDuration }
+        }
 
         internal fun effectiveDropPercent(
             startBatteryLevel: Int,
