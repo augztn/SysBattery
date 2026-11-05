@@ -327,6 +327,7 @@ class BatteryMonitorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        DiagnosticLogger.initialize(applicationContext)
         reader = BatterySysfsReader(applicationContext)
         sessionDb = BatterySessionDbHelper.getInstance(applicationContext)
         restoreCounters()
