@@ -847,11 +847,14 @@ class BatteryMonitorService : Service() {
         }
     }
 
-    private fun updateScreenState(interactive: Boolean, @Suppress("UNUSED_PARAMETER") now: Long = 0L) {
+    private fun updateScreenState(
+        interactive: Boolean,
+        nowElapsed: Long = SystemClock.elapsedRealtime()
+    ) {
         synchronized(screenStateLock) {
             updateScreenStateLocked(
                 interactive = interactive,
-                nowElapsed = SystemClock.elapsedRealtime(),
+                nowElapsed = nowElapsed,
                 nowUptime = SystemClock.uptimeMillis()
             )
         }
@@ -1130,7 +1133,7 @@ class BatteryMonitorService : Service() {
             val intDrop = (openStartLvl - currentLevel).coerceAtLeast(0)
             if (openSubDrop > 0.0) {
                 val minBound = (intDrop - 0.99).coerceAtLeast(0.0)
-                val maxBound = intDrop + 0.99
+                val maxBound = minOf(intDrop + 0.99, openStartLvl.toDouble())
                 openSubDrop.coerceIn(minBound, maxBound)
             } else {
                 intDrop.toDouble()
@@ -1300,7 +1303,6 @@ class BatteryMonitorService : Service() {
         rates: BatteryStatsCalculator.Rates?,
         charging: Boolean?,
         tele: SessionTelemetry,
-        showBatteryPercentage: Boolean,
         showChargingPower: Boolean,
         temperatureUnit: String,
         idleWarningText: String?
@@ -1330,7 +1332,7 @@ class BatteryMonitorService : Service() {
         val modeLabel = when (charging) {
             true -> "Charging"
             false -> "Discharging"
-            null -> "Discharging"
+            null -> "Status unknown"
         }
 
         val headerLine = buildString {
@@ -1463,7 +1465,6 @@ class BatteryMonitorService : Service() {
             rates = rates,
             charging = charging,
             tele = tele,
-            showBatteryPercentage = showBatteryPercentage,
             showChargingPower = showChargingPower,
             temperatureUnit = temperatureUnit,
             idleWarningText = idleWarningText
