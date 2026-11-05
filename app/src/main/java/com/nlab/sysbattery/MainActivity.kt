@@ -283,10 +283,12 @@ class MainActivity : ComponentActivity() {
                         SysBatteryTopBar(
                             running = running,
                             onToggleMonitor = {
-                                val next = !running
-                                if (next) BatteryMonitorService.start(this)
-                                else BatteryMonitorService.stop(this)
-                                running = next
+                                if (running) {
+                                    BatteryMonitorService.stop(this@MainActivity)
+                                    running = false
+                                } else {
+                                    running = BatteryMonitorService.start(this@MainActivity)
+                                }
                             }
                         )
                     },
@@ -359,7 +361,7 @@ class MainActivity : ComponentActivity() {
                                         rates = state.rates,
                                         session = state.session,
                                         running = running,
-                                        onStart = { BatteryMonitorService.start(this@MainActivity); running = true },
+                                        onStart = { running = BatteryMonitorService.start(this@MainActivity) },
                                         onStop = { BatteryMonitorService.stop(this@MainActivity); running = false },
                                         onBackground = { openBackgroundSettings() },
                                         batteryHistory = batteryHistory,
@@ -388,8 +390,7 @@ class MainActivity : ComponentActivity() {
                                         running = running,
                                         onMonitorEnabledChange = { enabled ->
                                             if (enabled) {
-                                                BatteryMonitorService.start(this@MainActivity)
-                                                running = true
+                                                running = BatteryMonitorService.start(this@MainActivity)
                                             } else {
                                                 BatteryMonitorService.stop(this@MainActivity)
                                                 running = false
