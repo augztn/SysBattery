@@ -1,7 +1,6 @@
 package com.nlab.sysbattery.data
 
 import com.nlab.sysbattery.diagnostics.DiagnosticLogger
-import com.nlab.sysbattery.data.waitForProcessExit
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
