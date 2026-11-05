@@ -147,7 +147,9 @@ class BatterySysfsReader(context: Context) {
         )?.toInt()?.takeIf { it >= 0 }
 
         if (shouldUpdateEstimatedFullChargeCapacity(level, chargeCounter, current)) {
-            estimatePrefs.edit().putLong("estimated_full_charge_capacity_uah", chargeCounter).apply()
+            chargeCounter?.let { measuredCapacity ->
+                estimatePrefs.edit().putLong("estimated_full_charge_capacity_uah", measuredCapacity).apply()
+            }
         }
         val estimatedFullChargeCapacity = estimatePrefs
             .safeLong("estimated_full_charge_capacity_uah", 0L)
