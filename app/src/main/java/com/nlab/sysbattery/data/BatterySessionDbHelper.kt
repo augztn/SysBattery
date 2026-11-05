@@ -117,7 +117,7 @@ class BatterySessionDbHelper private constructor(context: Context) :
         val effectiveDrop = when {
             measuredSubPercentDrop != null && measuredSubPercentDrop.isFinite() && measuredSubPercentDrop > 0.0 -> {
                 val minBound = (integerDrop - 0.99).coerceAtLeast(0.0)
-                val maxBound = integerDrop + 0.99
+                val maxBound = minOf(integerDrop + 0.99, startBatteryLevel.toDouble())
                 measuredSubPercentDrop.coerceIn(minBound, maxBound)
             }
             integerDrop > 0 -> integerDrop.toDouble()
@@ -300,6 +300,8 @@ class BatterySessionDbHelper private constructor(context: Context) :
             elapsedMillis: Long
         ): Double? {
             if (elapsedMillis < MIN_VALID_SESSION_MS) return null
+            if (!startBatteryPercent.isFinite() || !endBatteryPercent.isFinite()) return null
+            if (startBatteryPercent !in 0.0..100.0 || endBatteryPercent !in 0.0..100.0) return null
             val deltaPercent = startBatteryPercent - endBatteryPercent
             if (!deltaPercent.isFinite() || deltaPercent < -0.0001) return null
             val hours = elapsedMillis.toDouble() / 3_600_000.0
