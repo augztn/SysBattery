@@ -182,6 +182,13 @@ class BatteryStatsCalculatorTest {
     }
 
     @Test
+    fun currentSampleFreshnessUsesMonotonicNonNegativeAge() {
+        assertTrue(BatterySysfsReader.isCurrentSampleFresh(5_000L, 1_000L))
+        assertFalse(BatterySysfsReader.isCurrentSampleFresh(6_001L, 1_000L))
+        assertFalse(BatterySysfsReader.isCurrentSampleFresh(999L, 1_000L))
+    }
+
+    @Test
     fun estimatedFullCapacityRequiresAStableLowCurrentAtFullLevel() {
         val qualifies = BatterySysfsReader.shouldUpdateEstimatedFullChargeCapacity(
             levelPercent = 100,
