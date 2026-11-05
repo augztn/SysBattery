@@ -5,12 +5,12 @@ SysBattery is an open-source Android battery telemetry monitor built with Kotlin
 ## Features
 
 - Material 3 dashboard with rounded translucent cards, light/dark themes, and a modern glass-inspired appearance.
-- At-a-glance battery history chart for the current app session, with minimum and maximum recorded charge labels. Raw telemetry samples are also persisted in a bounded local SQLite history (30-day retention); the chart has not yet been switched to query that database.
+- At-a-glance battery history chart for the current app process, with minimum and maximum recorded charge labels. Chart samples are held in memory and reset when the process restarts. Completed active/idle session summaries are stored in SQLite with a 7-day retention window and a 250-record cap.
 - Settings access overview for optional Usage Access, Shizuku, and root diagnostics, with clear distinction between basic monitoring and advanced access.
 - Battery percentage, current, voltage, temperature, charging direction, and estimated discharge rate when supported by the device.
-- User-started foreground monitoring with an ongoing notification that updates with live battery information.
+- Foreground monitoring with an ongoing notification that updates with live battery information; monitoring can be turned off from the dashboard or Settings.
 - Drain estimates show a collection state until the first sample interval elapses; monitoring iterations log recoverable failures and retry instead of silently ending.
-- Background-settings shortcut falls back to general battery optimization and app-info pages when a vendor ROM does not expose the direct exemption screen.
+- Background-settings shortcut opens Android's battery optimization list and falls back to app-info settings when a vendor ROM does not expose that screen.
 - Notification tap opens the dashboard; if Android permits the ongoing notification to be dismissed, a delete receiver requests restoration.
 - Remembers whether monitoring was enabled and attempts recovery after device reboot or app update.
 - Best-effort battery background guidance for ColorOS/OxygenOS, HyperOS, and One UI.
@@ -58,7 +58,7 @@ Root access is optional. Denying it does not affect standard battery monitoring.
 - BatteryManager current/charge-counter values can be unsupported or vendor-dependent. Sysfs access is best-effort and often restricted on retail devices.
 - Shizuku can run a fixed, read-only `dumpsys batterystats --charged` query through its authorized user service. This is optional system-statistics access; it does not grant arbitrary protected sysfs access.
 - Device-specific full-charge capacity, state-of-health, and cycle-count metrics are not yet implemented. PlusPlusBattery demonstrates useful OPlus-specific FCC/SOH estimates and cycle-count history, but these require device-specific data sources and careful validation before inclusion.
-- Per-app power attribution, reliable historical deep-sleep accounting, and component power estimates are not implemented. Raw timestamped battery samples are persisted locally, but no historical chart/query screen consumes that database yet.
+- Per-app power attribution, reliable historical deep-sleep accounting, raw-sample database history, and component power estimates are not implemented. Only completed active/idle session summaries are persisted locally; the current-process chart is in-memory.
 - The glass effect uses translucent surfaces and gradients rather than platform-specific backdrop blur, keeping the UI compatible across Android skins.
 
 See [docs/battery_logic_spec.md](docs/battery_logic_spec.md) for evidence tags and formula assumptions.
