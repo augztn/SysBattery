@@ -9,6 +9,7 @@ object RootBatteryStatsParser {
     data class Finding(val label: String, val value: String)
 
     private val estimatedPower = Regex("""(?i)^\s*estimated power use(?:\s*\([^)]*\))?\s*:\s*(.+?)\s*$""")
+    private val estimatedPowerSectionEnd = Regex("""(?i)^(?:battery history|statistics since|history|per-app|per application)\b.*$""")
     private val capacity = Regex("""(?i)^\s*(?:battery )?capacity\s*[:=]\s*(.+?)\s*$""")
     private val discharge = Regex("""(?i)^\s*(discharge(?:d)?(?:\s+since.*)?|start clock time)\s*[:=]\s*(.+?)\s*$""")
     private val screen = Regex("""(?i)^\s*(screen(?: on| off)? time|screen-on time|screen-off time|screen)\s*:\s*(.+?)\s*$""")
@@ -33,6 +34,9 @@ object RootBatteryStatsParser {
         output.lineSequence().forEach { raw ->
             val line = raw.trim()
             if (line.isEmpty()) return@forEach
+            if (estimatedPowerSectionEnd.matches(line)) {
+                inEstimatedPowerSection = false
+            }
             if (line.startsWith("Estimated power use", ignoreCase = true)) {
                 inEstimatedPowerSection = true
             }
