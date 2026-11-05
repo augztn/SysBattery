@@ -1,6 +1,7 @@
 package com.nlab.sysbattery.data
 
 import com.nlab.sysbattery.diagnostics.DiagnosticLogger
+import com.nlab.sysbattery.data.waitForProcessExit
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
@@ -60,19 +61,17 @@ class RootAccessReader {
                 }
             }
             Thread(outputTask, "SysBatteryRootOutput").apply { isDaemon = true; start() }
-            val finished = process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            if (!finished) {
-                process.destroyForcibly()
-                outputTask.cancel(true)
-                process.waitFor(1, TimeUnit.SECONDS)
-                return CommandResult(-1, "")
-            }
+            val exitCode = waitForProcessExit(process, TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                ?: run {
+                    outputTask.cancel(true)
+                    return CommandResult(-1, "")
+                }
             val output = try {
                 outputTask.get(2, TimeUnit.SECONDS)
             } catch (_: Exception) {
                 ""
             }
-            CommandResult(process.exitValue(), output)
+            CommandResult(exitCode, output)
         } catch (e: Exception) {
             DiagnosticLogger.warn("Root diagnostics command failed", e)
             CommandResult(-1, "")
