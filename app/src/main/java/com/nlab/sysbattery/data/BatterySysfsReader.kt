@@ -209,7 +209,8 @@ class BatterySysfsReader(context: Context) {
             currentMicroAmps: Long?
         ): Boolean {
             if (levelPercent != 100) return false
-            if (chargeCounterMicroAmpHours !in 1_000_000L..30_000_000L) return false
+            val chargeCounter = chargeCounterMicroAmpHours ?: return false
+            if (chargeCounter !in 1_000_000L..30_000_000L) return false
             val current = currentMicroAmps ?: return false
             return current in -25_000L..-1_000L || current in 1_000L..25_000L
         }
