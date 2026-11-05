@@ -15,6 +15,9 @@ class RootBatteryStatsParserTest {
         )
         assertTrue(findings.any { it.label == "Estimated power" && it.value == "245.7" })
         assertTrue(findings.any { it.label == "Screen time/state" && it.value.contains("1h 20m") })
+        org.junit.Assert.assertFalse(findings.any {
+            it.label == "Component estimate (mAh)" && it.value.contains("1h 20m")
+        })
         assertTrue(findings.any { it.label == "UID estimate (mAh)" && it.value.contains("u0a123") })
     }
 
