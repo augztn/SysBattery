@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
+import android.os.SystemClock
 import java.io.File
 import java.io.IOException
 import kotlin.math.abs
@@ -28,7 +29,7 @@ class BatterySysfsReader(context: Context) {
     private var lastValidCurrentMicroAmps: Long? = null
 
     @Volatile
-    private var lastValidCurrentTimestampMs: Long = 0L
+    private var lastValidCurrentElapsedRealtimeMs: Long = 0L
 
     data class Snapshot(
         val timestampMillis: Long = System.currentTimeMillis(),
@@ -50,6 +51,7 @@ class BatterySysfsReader(context: Context) {
 
     fun readSnapshot(): Snapshot {
         val now = System.currentTimeMillis()
+        val nowElapsed = SystemClock.elapsedRealtime()
         val batteryIntent = try {
             appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         } catch (_: RuntimeException) {
@@ -84,9 +86,12 @@ class BatterySysfsReader(context: Context) {
 
         val current = if (primaryCurrent != null) {
             lastValidCurrentMicroAmps = primaryCurrent
-            lastValidCurrentTimestampMs = now
+            lastValidCurrentElapsedRealtimeMs = nowElapsed
             primaryCurrent
-        } else if (lastValidCurrentMicroAmps != null && (now - lastValidCurrentTimestampMs) <= 5_000L) {
+        } else if (
+            lastValidCurrentMicroAmps != null &&
+            isCurrentSampleFresh(nowElapsed, lastValidCurrentElapsedRealtimeMs)
+        ) {
             lastValidCurrentMicroAmps
         } else {
             normSysfsCurrent ?: normPropCurrent
@@ -205,6 +210,9 @@ class BatterySysfsReader(context: Context) {
     }
 
     companion object {
+        internal fun isCurrentSampleFresh(nowElapsedMs: Long, previousElapsedMs: Long): Boolean =
+            nowElapsedMs - previousElapsedMs in 0L..5_000L
+
         internal fun shouldUpdateEstimatedFullChargeCapacity(
             levelPercent: Int?,
             chargeCounterMicroAmpHours: Long?,
