@@ -83,7 +83,8 @@ class BatterySessionDbHelper private constructor(context: Context) :
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_SESSIONS")
+        // Preserve user history on app upgrades. Add explicit, versioned ALTER TABLE
+        // migrations here when the persisted schema actually changes.
         onCreate(db)
     }
 
@@ -101,6 +102,8 @@ class BatterySessionDbHelper private constructor(context: Context) :
         measuredSubPercentDrop: Double? = null,
         recordedEpochMs: Long = System.currentTimeMillis()
     ): Boolean {
+        if (startBatteryLevel !in 0..100 || endBatteryLevel !in 0..100) return false
+        if (recordedEpochMs <= 0L) return false
         val elapsedMs = endElapsedMs - startElapsedMs
         if (elapsedMs < MIN_VALID_SESSION_MS) {
             return false
@@ -139,9 +142,16 @@ class BatterySessionDbHelper private constructor(context: Context) :
                 put(COL_DROP_PERCENT, effectiveDrop)
                 put(COL_RATE_PER_HOUR, ratePerHour)
             }
-            val rowId = db.insert(TABLE_SESSIONS, null, values)
-            pruneOldSessions(db, recordedEpochMs)
-            rowId != -1L
+            db.beginTransaction()
+            try {
+                val rowId = db.insert(TABLE_SESSIONS, null, values)
+                if (rowId == -1L) return@runCatching false
+                pruneOldSessions(db, recordedEpochMs)
+                db.setTransactionSuccessful()
+                true
+            } finally {
+                db.endTransaction()
+            }
         }.getOrElse { e ->
             DiagnosticLogger.error("Failed to insert battery session", e)
             false
@@ -153,6 +163,7 @@ class BatterySessionDbHelper private constructor(context: Context) :
         nowEpochMs: Long = System.currentTimeMillis(),
         recentLimit: Int = 20
     ): Rolling24hSummary {
+        val safeRecentLimit = recentLimit.coerceIn(1, 100)
         val cutoffEpochMs = nowEpochMs - WINDOW_24_HOURS_MS
         var activeDrop = 0.0
         var activeDuration = 0L
@@ -195,7 +206,7 @@ class BatterySessionDbHelper private constructor(context: Context) :
                 null,
                 null,
                 "$COL_ID DESC",
-                recentLimit.toString()
+                safeRecentLimit.toString()
             ).use { cursor ->
                 val idIdx = cursor.getColumnIndexOrThrow(COL_ID)
                 val typeIdx = cursor.getColumnIndexOrThrow(COL_SESSION_TYPE)
