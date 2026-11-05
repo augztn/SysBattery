@@ -192,7 +192,6 @@ class BatteryMonitorService : Service() {
 
     companion object {
         const val ACTION_START = "com.nlab.sysbattery.action.START"
-        const val ACTION_STOP = "com.nlab.sysbattery.action.STOP"
         const val ACTION_REFRESH = "com.nlab.sysbattery.action.REFRESH"
         const val EXTRA_INTERVAL_MS = "interval_ms"
         private const val DEFAULT_INTERVAL_MS = 1_000L
@@ -514,13 +513,6 @@ class BatteryMonitorService : Service() {
             isRunningInForeground = false
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf(startId)
-            return START_NOT_STICKY
-        }
-        if (intent?.action == ACTION_STOP) {
-            monitorJob?.cancel()
-            isRunningInForeground = false
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
             return START_NOT_STICKY
         }
         if (intent?.action == ACTION_REFRESH && monitorJob?.isActive == true) {
