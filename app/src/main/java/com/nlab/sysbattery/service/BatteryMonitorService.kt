@@ -1652,14 +1652,17 @@ class BatteryMonitorService : Service() {
         DiagnosticLogger.info("Battery monitor service destroyed")
         isRunningInForeground = false
         monitorJob?.cancel()
+        scope.cancel()
         if (screenReceiverRegistered) {
             runCatching { unregisterReceiver(hardwareStateReceiver) }
             screenReceiverRegistered = false
         }
-        accumulateScreenTime()
-        persistCounters()
-        persistRateSamples()
-        scope.cancel()
+        // Wait for an in-flight sample before taking the final persisted snapshot.
+        synchronized(sampleLock) {
+            accumulateScreenTime()
+            persistCounters()
+            persistRateSamples()
+        }
         super.onDestroy()
     }
 
