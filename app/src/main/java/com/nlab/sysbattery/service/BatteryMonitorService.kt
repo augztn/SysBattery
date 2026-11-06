@@ -192,7 +192,6 @@ class BatteryMonitorService : Service() {
 
     companion object {
         const val ACTION_START = "com.nlab.sysbattery.action.START"
-        const val ACTION_STOP = "com.nlab.sysbattery.action.STOP"
         const val ACTION_REFRESH = "com.nlab.sysbattery.action.REFRESH"
         const val EXTRA_INTERVAL_MS = "interval_ms"
         private const val DEFAULT_INTERVAL_MS = 1_000L
@@ -251,21 +250,25 @@ class BatteryMonitorService : Service() {
             }
         }
 
-        fun start(context: Context, intervalMs: Long = DEFAULT_INTERVAL_MS) {
+        fun start(context: Context, intervalMs: Long = DEFAULT_INTERVAL_MS): Boolean {
             val appCtx = context.applicationContext
-            appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-                .putBoolean(PREF_MONITOR_ENABLED, true).apply()
+            val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().putBoolean(PREF_MONITOR_ENABLED, true).apply()
             val intent = Intent(appCtx, BatteryMonitorService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_INTERVAL_MS, intervalMs.coerceIn(1_000L, 60_000L))
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return runCatching {
+                val component = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     appCtx.startForegroundService(intent)
                 } else {
                     appCtx.startService(intent)
                 }
-            }.onFailure { e ->
+                check(component != null) { "BatteryMonitorService could not be resolved" }
+                true
+            }.getOrElse { e ->
+                prefs.edit().putBoolean(PREF_MONITOR_ENABLED, false).apply()
                 DiagnosticLogger.warn("Could not start BatteryMonitorService from current state", e)
+                false
             }
         }
 
@@ -327,6 +330,7 @@ class BatteryMonitorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        DiagnosticLogger.initialize(applicationContext)
         reader = BatterySysfsReader(applicationContext)
         sessionDb = BatterySessionDbHelper.getInstance(applicationContext)
         restoreCounters()
@@ -511,13 +515,6 @@ class BatteryMonitorService : Service() {
             stopSelf(startId)
             return START_NOT_STICKY
         }
-        if (intent?.action == ACTION_STOP) {
-            monitorJob?.cancel()
-            isRunningInForeground = false
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
-        }
         if (intent?.action == ACTION_REFRESH && monitorJob?.isActive == true) {
             scope.launch {
                 runCatching { sampleAndPublish(forceNotificationUpdate = true) }
@@ -554,6 +551,7 @@ class BatteryMonitorService : Service() {
             lastNotificationUpdateElapsedMs = SystemClock.elapsedRealtime()
         }.onFailure { e ->
             DiagnosticLogger.error("Unable to enter foreground state", e)
+            prefs.edit().putBoolean(PREF_MONITOR_ENABLED, false).apply()
             isRunningInForeground = false
             stopSelf(startId)
             return START_NOT_STICKY
@@ -700,55 +698,42 @@ class BatteryMonitorService : Service() {
             val currentCounter = sample.chargeCounterMicroAmpHours
             val capacityUah = (sample.fullChargeCapacityMicroAmpHours
                 ?: sample.estimatedFullChargeCapacityMicroAmpHours
-                ?: sample.designCapacityMicroAmpHours
-                ?: 4_000_000L)
-                .takeIf { it in 100_000L..30_000_000L } ?: 4_000_000L
-            val capacityMah = capacityUah.toDouble() / 1_000.0
+                ?: sample.designCapacityMicroAmpHours)
+                ?.takeIf { it in 100_000L..30_000_000L }
+            val capacityMah = capacityUah?.div(1_000.0)
 
             val currentMa = sample.currentMicroAmps?.let { abs(it) / 1_000.0 }
                 ?.takeIf { it.isFinite() && it in 1.0..15_000.0 }
 
-            val rawOnLoss = if (onElapsed > 0L) {
-                val activeMa = currentMa ?: 300.0
-                (activeMa * (onElapsed / 3_600_000.0) / capacityMah * 100.0)
+            // Derive loss only from observed current and a real capacity reading.
+            val rawOnLoss = if (onElapsed > 0L && currentMa != null && capacityMah != null) {
+                (currentMa * (onElapsed / 3_600_000.0) / capacityMah * 100.0)
                     .takeIf { it.isFinite() && it in 0.0..5.0 } ?: 0.0
             } else 0.0
 
-            val totalOffSoFar = synchronized(screenStateLock) { screenOffMillis }
-            val (rawSleepLoss, rawAwakeLoss) = if (offElapsed > 0L) {
-                val sleepMa = ((currentMa ?: 180.0) * 0.08).coerceIn(12.0, 28.0)
-                // Use live fuel-gauge current during Awake; only clamp the first 2 seconds after screen-off
-                // to prevent screen-on backlight current from spiking a 1-second screen lock.
-                val maxAwakeMa = if (totalOffSoFar < 2_500L) 220.0 else 1_200.0
-                val awakeMa = (currentMa ?: 180.0).coerceIn(45.0, maxAwakeMa)
-
-                val calcSleep = (sleepMa * (sleepElapsed / 3_600_000.0) / capacityMah * 100.0)
-                    .takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
-                val calcAwake = (awakeMa * (awakeElapsed / 3_600_000.0) / capacityMah * 100.0)
-                    .takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
-                val calcTotalOff = calcSleep + calcAwake
-
+            val (rawSleepLoss, rawAwakeLoss) = if (
+                offElapsed > 0L && currentMa != null && capacityMah != null
+            ) {
+                // Current is a single aggregate interval reading; allocate measured interval
+                // energy by observed sleep/awake duration instead of guessing separate currents.
+                val measuredOffLoss = (
+                    currentMa * (offElapsed / 3_600_000.0) / capacityMah * 100.0
+                ).takeIf { it.isFinite() && it in 0.0..5.0 } ?: 0.0
                 val counterDeltaUah = if (previousCounter != null && currentCounter != null) {
                     previousCounter - currentCounter
                 } else null
                 val maxPlausibleOffLoss = (offElapsed / 3_600_000.0 * 35.0).coerceIn(0.01, 5.0)
                 val counterOffLoss = if (
-                    onElapsed < 2_000L &&
-                    offElapsed >= 15_000L &&
-                    counterDeltaUah != null &&
-                    counterDeltaUah in 1L..100_000L
+                    onElapsed < 2_000L && offElapsed >= 15_000L &&
+                    counterDeltaUah != null && counterDeltaUah in 1L..100_000L
                 ) {
                     (counterDeltaUah.toDouble() / capacityUah.toDouble() * 100.0)
                         .takeIf { it.isFinite() && it in 0.0..maxPlausibleOffLoss }
                 } else null
-
-                if (counterOffLoss != null && calcTotalOff > 0.0) {
-                    val sleepRatio = (calcSleep / calcTotalOff).coerceIn(0.0, 1.0)
-                    val sLoss = counterOffLoss * sleepRatio
-                    Pair(sLoss, (counterOffLoss - sLoss).coerceAtLeast(0.0))
-                } else {
-                    Pair(calcSleep, calcAwake)
-                }
+                val totalOffLoss = counterOffLoss ?: measuredOffLoss
+                val sleepRatio = (sleepElapsed.toDouble() / offElapsed.toDouble()).coerceIn(0.0, 1.0)
+                val sleepLoss = totalOffLoss * sleepRatio
+                Pair(sleepLoss, (totalOffLoss - sleepLoss).coerceAtLeast(0.0))
             } else Pair(0.0, 0.0)
 
             val rawOffLoss = rawSleepLoss + rawAwakeLoss
@@ -859,11 +844,14 @@ class BatteryMonitorService : Service() {
         }
     }
 
-    private fun updateScreenState(interactive: Boolean, @Suppress("UNUSED_PARAMETER") now: Long = 0L) {
+    private fun updateScreenState(
+        interactive: Boolean,
+        nowElapsed: Long = SystemClock.elapsedRealtime()
+    ) {
         synchronized(screenStateLock) {
             updateScreenStateLocked(
                 interactive = interactive,
-                nowElapsed = SystemClock.elapsedRealtime(),
+                nowElapsed = nowElapsed,
                 nowUptime = SystemClock.uptimeMillis()
             )
         }
@@ -1139,14 +1127,12 @@ class BatteryMonitorService : Service() {
         } else 0L
 
         val openEffectiveDrop = if (openActive && openStartLvl in 0..100 && currentLevel != null) {
-            val intDrop = (openStartLvl - currentLevel).coerceAtLeast(0)
-            if (openSubDrop > 0.0) {
-                val minBound = (intDrop - 0.99).coerceAtLeast(0.0)
-                val maxBound = intDrop + 0.99
-                openSubDrop.coerceIn(minBound, maxBound)
-            } else {
-                intDrop.toDouble()
-            }
+            val integerDrop = (openStartLvl - currentLevel).coerceAtLeast(0)
+            BatterySessionDbHelper.effectiveDropPercent(
+                startBatteryLevel = openStartLvl,
+                integerDrop = integerDrop,
+                measuredSubPercentDrop = openSubDrop
+            )
         } else 0.0
 
         val openRateDouble = if (openActive && openDurationMs >= BatterySessionDbHelper.MIN_VALID_SESSION_MS) {
@@ -1186,8 +1172,8 @@ class BatteryMonitorService : Service() {
                     ?.takeIf { it.isFinite() && it in 1.0..15_000.0 }
                 val capMah = (sample?.fullChargeCapacityMicroAmpHours
                     ?: sample?.estimatedFullChargeCapacityMicroAmpHours
-                    ?: sample?.designCapacityMicroAmpHours
-                    ?: 4_000_000L).takeIf { it in 100_000L..30_000_000L }?.div(1_000.0)
+                    ?: sample?.designCapacityMicroAmpHours)
+                    ?.takeIf { it in 100_000L..30_000_000L }?.div(1_000.0)
                 if (currentMa != null && capMah != null && capMah > 0.0) {
                     (currentMa * 100.0 / capMah).takeIf { it.isFinite() && it in 0.01..200.0 }
                 } else null
@@ -1312,7 +1298,6 @@ class BatteryMonitorService : Service() {
         rates: BatteryStatsCalculator.Rates?,
         charging: Boolean?,
         tele: SessionTelemetry,
-        showBatteryPercentage: Boolean,
         showChargingPower: Boolean,
         temperatureUnit: String,
         idleWarningText: String?
@@ -1342,7 +1327,7 @@ class BatteryMonitorService : Service() {
         val modeLabel = when (charging) {
             true -> "Charging"
             false -> "Discharging"
-            null -> "Discharging"
+            null -> "Status unknown"
         }
 
         val headerLine = buildString {
@@ -1475,7 +1460,6 @@ class BatteryMonitorService : Service() {
             rates = rates,
             charging = charging,
             tele = tele,
-            showBatteryPercentage = showBatteryPercentage,
             showChargingPower = showChargingPower,
             temperatureUnit = temperatureUnit,
             idleWarningText = idleWarningText
@@ -1667,14 +1651,17 @@ class BatteryMonitorService : Service() {
         DiagnosticLogger.info("Battery monitor service destroyed")
         isRunningInForeground = false
         monitorJob?.cancel()
+        scope.cancel()
         if (screenReceiverRegistered) {
             runCatching { unregisterReceiver(hardwareStateReceiver) }
             screenReceiverRegistered = false
         }
-        accumulateScreenTime()
-        persistCounters()
-        persistRateSamples()
-        scope.cancel()
+        // Wait for an in-flight sample before taking the final persisted snapshot.
+        synchronized(sampleLock) {
+            accumulateScreenTime()
+            persistCounters()
+            persistRateSamples()
+        }
         super.onDestroy()
     }
 

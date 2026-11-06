@@ -15,7 +15,56 @@ class RootBatteryStatsParserTest {
         )
         assertTrue(findings.any { it.label == "Estimated power" && it.value == "245.7" })
         assertTrue(findings.any { it.label == "Screen time/state" && it.value.contains("1h 20m") })
+        org.junit.Assert.assertFalse(findings.any {
+            it.label == "Component estimate (mAh)" && it.value.contains("1h 20m")
+        })
         assertTrue(findings.any { it.label == "UID estimate (mAh)" && it.value.contains("u0a123") })
+    }
+
+    @Test fun parsesStructuredPerUidPowerEstimatesOnlyInsideEstimatedPowerSection() {
+        val output = """
+            Estimated power use (mAh):
+              UID u0a446: 296 fg: 115 bg: 6.94
+              UID 10123: 12.5
+            Battery History:
+              UID u0a999: 900
+        """.trimIndent()
+
+        val estimates = RootBatteryStatsParser.parseUidPowerEstimates(output)
+        assertEquals(2, estimates.size)
+        assertEquals("u0a446", estimates[0].uid)
+        assertEquals(296.0, estimates[0].powerMah, 0.001)
+        assertEquals(6.94, estimates[0].backgroundPowerMah!!, 0.001)
+        assertEquals("10123", estimates[1].uid)
+        assertEquals(12.5, estimates[1].powerMah, 0.001)
+    }
+
+    @Test fun rejectsInvalidUidPowerEstimates() {
+        val output = """
+            Estimated power use (mAh):
+              UID u0a446: -4
+              UID u0a447: NaN
+              UID u0a448: 120000
+        """.trimIndent()
+        assertTrue(RootBatteryStatsParser.parseUidPowerEstimates(output).isEmpty())
+    }
+
+    @Test fun stopsComponentEstimatesWhenBatteryHistoryBegins() {
+        val findings = RootBatteryStatsParser.parse(
+            """
+            Estimated power use (mAh):
+              screen: 427 apps: 427
+            Battery History (1% used, 2h realtime):
+              screen: 1
+              cpu: 2
+            """.trimIndent()
+        )
+        val componentFindings = findings.filter { it.label == "Component estimate (mAh)" }
+        assertEquals(1, componentFindings.size)
+        assertTrue(componentFindings.single().value.startsWith("screen: 427"))
+        org.junit.Assert.assertFalse(findings.any {
+            it.label == "Screen time/state" && it.value.contains("screen: 1")
+        })
     }
 
     @Test fun parsesWakeLockAndHistoryEvents() {
@@ -46,9 +95,36 @@ class RootBatteryStatsParserTest {
         assertTrue(findings.any { it.label == "UID estimate (mAh)" && it.value.startsWith("UID u0a446: 296") })
     }
 
+    @Test fun parsesAlarmAndJobSchedulerRecords() {
+        val alarms = RootBatteryStatsParser.parseSchedulerDump(
+            """
+            Alarm Stats:
+              com.example.music +4m12s running, 12 wakeups
+              RTC_WAKEUP #0: com.example.sync
+            """.trimIndent(),
+            "Alarm"
+        )
+        val jobs = RootBatteryStatsParser.parseSchedulerDump(
+            """
+            JOB #u0a123/42: com.example.worker/.SyncJobService
+            JobStatus{abc u0a123 com.example.backup/.Job}
+            """.trimIndent(),
+            "Job"
+        )
+        assertTrue(alarms.any { it.label == "Alarm activity" && it.value.contains("com.example.music") })
+        assertTrue(jobs.any { it.label == "Scheduled job" && it.value.contains("com.example.worker") })
+    }
+
     @Test fun ignoresEmptyAndBoundsOutput() {
         assertEquals(0, RootBatteryStatsParser.parse("").size)
         assertEquals(2, RootBatteryStatsParser.parse("capacity: 4000\ncapacity: 4200", maxFindings = 2).size)
         assertEquals(1, RootBatteryStatsParser.parse("capacity: 4000\ncapacity: 4200", maxFindings = 1).size)
     }
+    @Test fun rootDetectionRequiresUidZeroNotJustGroupZero() {
+        assertTrue(hasRootUid("uid=0(root) gid=0(root) groups=0(root)"))
+        assertTrue(hasRootUid("uid=0 gid=2000"))
+        org.junit.Assert.assertFalse(hasRootUid("uid=2000(shell) gid=0(root)"))
+        org.junit.Assert.assertFalse(hasRootUid("uid=0123 gid=2000"))
+    }
+
 }

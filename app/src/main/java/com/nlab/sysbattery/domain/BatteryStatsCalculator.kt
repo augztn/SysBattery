@@ -33,6 +33,7 @@ object BatteryStatsCalculator {
     private const val RATE_WINDOW_MS = 10 * 60 * 1000L
     private const val MIN_LEVEL_RATE_SPAN_MS = 3 * 60 * 1000L
     private const val MIN_CURRENT_SPAN_MS = 15 * 1000L
+    private const val MAX_CURRENT_SAMPLE_AGE_MS = 30 * 1000L
     private const val MIN_SAMPLE_SPACING_MS = 1_000L
     private const val MAX_RATE_SAMPLES = 60
     private const val MAX_PLAUSIBLE_CURRENT_MA = 15_000.0
@@ -85,7 +86,9 @@ object BatteryStatsCalculator {
         val liveCurrentMa = current.currentMicroAmps?.let { raw ->
             (abs(raw) / 1_000.0).takeIf { it in 1.0..MAX_PLAUSIBLE_CURRENT_MA }
         }
-        val usableCurrent = validCurrentSamples.map { it.second }
+        val usableCurrent = validCurrentSamples
+            .filter { (now - it.first) in 0L..MAX_CURRENT_SAMPLE_AGE_MS }
+            .map { it.second }
         val currentMa = liveCurrentMa ?: usableCurrent.takeIf { it.isNotEmpty() }?.average()
         val voltageMv = current.voltageMilliVolts?.takeIf { it in 2_500L..5_000L }
         val powerW = if (currentMa != null && voltageMv != null) currentMa * voltageMv / 1_000_000.0 else null

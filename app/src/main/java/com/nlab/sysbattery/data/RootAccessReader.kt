@@ -18,8 +18,7 @@ class RootAccessReader {
     fun read(): RootReport {
         val identityResult = runRootCommand("id")
         val identity = identityResult.output.trim()
-        val rooted = identityResult.exitCode == 0 &&
-            (identity.contains("uid=0") || identity.contains("gid=0"))
+        val rooted = identityResult.exitCode == 0 && hasRootUid(identity)
         if (!rooted) {
             DiagnosticLogger.info("Root diagnostics unavailable: su missing or permission denied")
             return RootReport(
@@ -47,21 +46,31 @@ class RootAccessReader {
         return try {
             val process = ProcessBuilder("su", "-c", command).redirectErrorStream(true).start()
             val outputTask = java.util.concurrent.FutureTask<String> {
-                BufferedReader(InputStreamReader(process.inputStream)).use { it.readText() }
+                BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                    val output = StringBuilder()
+                    val buffer = CharArray(2_048)
+                    while (true) {
+                        val count = reader.read(buffer)
+                        if (count < 0) break
+                        val remaining = MAX_OUTPUT - output.length
+                        if (remaining > 0) output.append(buffer, 0, minOf(count, remaining))
+                        // Drain excess output so the process cannot block on a full pipe.
+                    }
+                    output.toString()
+                }
             }
             Thread(outputTask, "SysBatteryRootOutput").apply { isDaemon = true; start() }
-            val finished = process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            if (!finished) {
-                process.destroyForcibly()
-                outputTask.cancel(true)
-                return CommandResult(-1, "")
-            }
+            val exitCode = waitForProcessExit(process, TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                ?: run {
+                    outputTask.cancel(true)
+                    return CommandResult(-1, "")
+                }
             val output = try {
-                outputTask.get(2, TimeUnit.SECONDS).take(MAX_OUTPUT)
+                outputTask.get(2, TimeUnit.SECONDS)
             } catch (_: Exception) {
                 ""
             }
-            CommandResult(process.exitValue(), output)
+            CommandResult(exitCode, output)
         } catch (e: Exception) {
             DiagnosticLogger.warn("Root diagnostics command failed", e)
             CommandResult(-1, "")
@@ -73,3 +82,8 @@ class RootAccessReader {
         private const val MAX_OUTPUT = 24_000
     }
 }
+
+
+private val ROOT_UID_PATTERN = Regex("""(?:^|\s)uid=0(?:\s|\(|$)""")
+
+internal fun hasRootUid(identity: String): Boolean = ROOT_UID_PATTERN.containsMatchIn(identity)

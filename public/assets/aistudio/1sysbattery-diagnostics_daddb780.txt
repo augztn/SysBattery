@@ -1,4 +1,0 @@
-2026-11-04 20:21:36.395 [INFO] Diagnostics initialized; package=com.nlab.sysbattery sdk=36 device=realme RMX3461
-2026-11-04 20:21:36.401 [INFO] MainActivity created
-2026-11-04 20:21:36.535 [INFO] Battery monitor service starting
-2026-11-04 20:26:17.892 [INFO] Battery monitor service starting

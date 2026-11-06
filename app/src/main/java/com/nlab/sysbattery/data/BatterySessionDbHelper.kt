@@ -83,7 +83,8 @@ class BatterySessionDbHelper private constructor(context: Context) :
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_SESSIONS")
+        // Preserve user history on app upgrades. Add explicit, versioned ALTER TABLE
+        // migrations here when the persisted schema actually changes.
         onCreate(db)
     }
 
@@ -101,6 +102,8 @@ class BatterySessionDbHelper private constructor(context: Context) :
         measuredSubPercentDrop: Double? = null,
         recordedEpochMs: Long = System.currentTimeMillis()
     ): Boolean {
+        if (startBatteryLevel !in 0..100 || endBatteryLevel !in 0..100) return false
+        if (recordedEpochMs <= 0L) return false
         val elapsedMs = endElapsedMs - startElapsedMs
         if (elapsedMs < MIN_VALID_SESSION_MS) {
             return false
@@ -111,15 +114,11 @@ class BatterySessionDbHelper private constructor(context: Context) :
             return false
         }
 
-        val effectiveDrop = when {
-            measuredSubPercentDrop != null && measuredSubPercentDrop.isFinite() && measuredSubPercentDrop > 0.0 -> {
-                val minBound = (integerDrop - 0.99).coerceAtLeast(0.0)
-                val maxBound = integerDrop + 0.99
-                measuredSubPercentDrop.coerceIn(minBound, maxBound)
-            }
-            integerDrop > 0 -> integerDrop.toDouble()
-            else -> 0.0
-        }
+        val effectiveDrop = effectiveDropPercent(
+            startBatteryLevel = startBatteryLevel,
+            integerDrop = integerDrop,
+            measuredSubPercentDrop = measuredSubPercentDrop
+        )
 
         val ratePerHour = calculateSessionRatePerHour(
             startBatteryPercent = startBatteryLevel.toDouble(),
@@ -139,9 +138,16 @@ class BatterySessionDbHelper private constructor(context: Context) :
                 put(COL_DROP_PERCENT, effectiveDrop)
                 put(COL_RATE_PER_HOUR, ratePerHour)
             }
-            val rowId = db.insert(TABLE_SESSIONS, null, values)
-            pruneOldSessions(db, recordedEpochMs)
-            rowId != -1L
+            db.beginTransaction()
+            try {
+                val rowId = db.insert(TABLE_SESSIONS, null, values)
+                if (rowId == -1L) return@runCatching false
+                pruneOldSessions(db, recordedEpochMs)
+                db.setTransactionSuccessful()
+                true
+            } finally {
+                db.endTransaction()
+            }
         }.getOrElse { e ->
             DiagnosticLogger.error("Failed to insert battery session", e)
             false
@@ -153,6 +159,7 @@ class BatterySessionDbHelper private constructor(context: Context) :
         nowEpochMs: Long = System.currentTimeMillis(),
         recentLimit: Int = 20
     ): Rolling24hSummary {
+        val safeRecentLimit = recentLimit.coerceIn(1, 100)
         val cutoffEpochMs = nowEpochMs - WINDOW_24_HOURS_MS
         var activeDrop = 0.0
         var activeDuration = 0L
@@ -165,24 +172,36 @@ class BatterySessionDbHelper private constructor(context: Context) :
             db.rawQuery(
                 """
                 SELECT $COL_SESSION_TYPE,
-                       SUM($COL_DROP_PERCENT),
-                       SUM($COL_END_TS - $COL_START_TS)
+                       $COL_DROP_PERCENT,
+                       $COL_START_TS,
+                       $COL_END_TS,
+                       $COL_RECORDED_EPOCH
                 FROM $TABLE_SESSIONS
-                WHERE $COL_RECORDED_EPOCH >= ?
-                GROUP BY $COL_SESSION_TYPE
+                WHERE $COL_RECORDED_EPOCH >= ? AND $COL_RECORDED_EPOCH <= ?
                 """.trimIndent(),
-                arrayOf(cutoffEpochMs.toString())
+                arrayOf(cutoffEpochMs.toString(), nowEpochMs.toString())
             ).use { cursor ->
                 while (cursor.moveToNext()) {
                     val type = SessionType.fromDb(cursor.getString(0))
-                    val drop = cursor.getDouble(1).coerceAtLeast(0.0)
-                    val duration = cursor.getLong(2).coerceAtLeast(0L)
+                    val drop = cursor.getDouble(1)
+                    val startElapsed = cursor.getLong(2)
+                    val endElapsed = cursor.getLong(3)
+                    val recordedEpoch = cursor.getLong(4)
+                    val sessionDuration = endElapsed - startElapsed
+                    val sessionStartEpoch = recordedEpoch - sessionDuration
+                    val contribution = clipSessionToWindow(
+                        sessionStartEpochMs = sessionStartEpoch,
+                        sessionEndEpochMs = recordedEpoch,
+                        dropPercent = drop,
+                        windowStartEpochMs = cutoffEpochMs,
+                        windowEndEpochMs = nowEpochMs
+                    ) ?: continue
                     if (type == SessionType.ACTIVE) {
-                        activeDrop = drop
-                        activeDuration = duration
+                        activeDrop += contribution.first
+                        activeDuration += contribution.second
                     } else {
-                        idleDrop = drop
-                        idleDuration = duration
+                        idleDrop += contribution.first
+                        idleDuration += contribution.second
                     }
                 }
             }
@@ -195,7 +214,7 @@ class BatterySessionDbHelper private constructor(context: Context) :
                 null,
                 null,
                 "$COL_ID DESC",
-                recentLimit.toString()
+                safeRecentLimit.toString()
             ).use { cursor ->
                 val idIdx = cursor.getColumnIndexOrThrow(COL_ID)
                 val typeIdx = cursor.getColumnIndexOrThrow(COL_SESSION_TYPE)
@@ -279,6 +298,41 @@ class BatterySessionDbHelper private constructor(context: Context) :
                 instance ?: BatterySessionDbHelper(context.applicationContext).also { instance = it }
             }
 
+        internal fun clipSessionToWindow(
+            sessionStartEpochMs: Long,
+            sessionEndEpochMs: Long,
+            dropPercent: Double,
+            windowStartEpochMs: Long,
+            windowEndEpochMs: Long
+        ): Pair<Double, Long>? {
+            val sessionDuration = sessionEndEpochMs - sessionStartEpochMs
+            if (sessionDuration <= 0L || !dropPercent.isFinite() || dropPercent < 0.0) return null
+            val overlapStart = sessionStartEpochMs.coerceAtLeast(windowStartEpochMs)
+            val overlapEnd = sessionEndEpochMs.coerceAtMost(windowEndEpochMs)
+            val overlapDuration = (overlapEnd - overlapStart).coerceAtLeast(0L)
+            if (overlapDuration == 0L) return null
+            val overlapDrop = dropPercent * overlapDuration.toDouble() / sessionDuration.toDouble()
+            return overlapDrop.takeIf { it.isFinite() }?.let { it to overlapDuration }
+        }
+
+        internal fun effectiveDropPercent(
+            startBatteryLevel: Int,
+            integerDrop: Int,
+            measuredSubPercentDrop: Double?
+        ): Double {
+            val maxDrop = startBatteryLevel.coerceIn(0, 100).toDouble()
+            val boundedIntegerDrop = integerDrop.coerceIn(0, maxDrop.toInt())
+            if (measuredSubPercentDrop != null &&
+                measuredSubPercentDrop.isFinite() &&
+                measuredSubPercentDrop > 0.0
+            ) {
+                val minBound = (boundedIntegerDrop - 0.99).coerceAtLeast(0.0)
+                val maxBound = minOf(boundedIntegerDrop + 0.99, maxDrop)
+                return measuredSubPercentDrop.coerceIn(minBound, maxBound)
+            }
+            return boundedIntegerDrop.toDouble()
+        }
+
         /**
          * Differential Drain Formula:
          * Drain Rate (%/h) = (Baseline Battery % - Current Battery %) / (Session Elapsed Ms / 3,600,000)
@@ -289,6 +343,8 @@ class BatterySessionDbHelper private constructor(context: Context) :
             elapsedMillis: Long
         ): Double? {
             if (elapsedMillis < MIN_VALID_SESSION_MS) return null
+            if (!startBatteryPercent.isFinite() || !endBatteryPercent.isFinite()) return null
+            if (startBatteryPercent !in 0.0..100.0 || endBatteryPercent !in 0.0..100.0) return null
             val deltaPercent = startBatteryPercent - endBatteryPercent
             if (!deltaPercent.isFinite() || deltaPercent < -0.0001) return null
             val hours = elapsedMillis.toDouble() / 3_600_000.0

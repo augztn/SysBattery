@@ -2,7 +2,9 @@ package com.nlab.sysbattery.domain
 
 import com.nlab.sysbattery.data.BatterySysfsReader
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BatteryStatsCalculatorTest {
@@ -16,6 +18,23 @@ class BatteryStatsCalculatorTest {
             temperatureTenthsCelsius = 340,
             source = "test"
         )
+
+    @Test
+    fun currentDerivedRateIsUnavailableWithoutRealOrConfiguredCapacity() {
+        val current = sample(0L, 80, 4_000_000L).copy(
+            currentMicroAmps = -274_000L,
+            designCapacityMicroAmpHours = null,
+            fullChargeCapacityMicroAmpHours = null,
+            estimatedFullChargeCapacityMicroAmpHours = null
+        )
+        val result = BatteryStatsCalculator.calculateWindowed(
+            samples = listOf(BatteryStatsCalculator.TimedSample(0L, 80, -274_000L, 4_000_000L)),
+            current = current,
+            isCharging = false
+        )
+        assertNull(result.batteryPercentPerHour)
+        assertEquals(274.0, result.currentMilliAmpsMagnitude!!, 0.01)
+    }
 
     @Test
     fun chargingPercentageIncreaseIsNotReportedAsDrain() {
@@ -138,7 +157,6 @@ class BatteryStatsCalculatorTest {
             rates = null,
             charging = false,
             tele = tele,
-            showBatteryPercentage = true,
             showChargingPower = true,
             temperatureUnit = "Celsius (°C)",
             idleWarningText = null
@@ -147,6 +165,69 @@ class BatteryStatsCalculatorTest {
         assertEquals("Screen off: 26s (0.5%)", payload.screenOffLine)
         assertEquals("Deep sleep: 18s (0.2%)", payload.deepSleepLine)
         assertEquals("Awake: 8s (0.3%)", payload.awakeLine)
+    }
+
+    @Test
+    fun notificationShowsUnknownInsteadOfAssumingDischargeWhenStatusIsUnavailable() {
+        val payload = com.nlab.sysbattery.service.BatteryMonitorService().buildNotificationPayload(
+            sample = sample(0L, 80),
+            rates = null,
+            charging = null,
+            tele = com.nlab.sysbattery.service.BatteryMonitorService.SessionTelemetry(),
+            showChargingPower = true,
+            temperatureUnit = "Celsius (°C)",
+            idleWarningText = null
+        )
+        assertTrue(payload.headerLine.contains("Status unknown"))
+    }
+
+    @Test
+    fun currentSampleFreshnessUsesMonotonicNonNegativeAge() {
+        assertTrue(BatterySysfsReader.isCurrentSampleFresh(5_000L, 1_000L))
+        assertFalse(BatterySysfsReader.isCurrentSampleFresh(6_001L, 1_000L))
+        assertFalse(BatterySysfsReader.isCurrentSampleFresh(999L, 1_000L))
+    }
+
+    @Test
+    fun estimatedFullCapacityRequiresAStableLowCurrentAtFullLevel() {
+        val qualifies = BatterySysfsReader.shouldUpdateEstimatedFullChargeCapacity(
+            levelPercent = 100,
+            chargeCounterMicroAmpHours = 4_200_000L,
+            currentMicroAmps = 25_000L
+        )
+        assertTrue(qualifies)
+        assertFalse(BatterySysfsReader.shouldUpdateEstimatedFullChargeCapacity(
+            levelPercent = 100,
+            chargeCounterMicroAmpHours = 4_200_000L,
+            currentMicroAmps = 25_001L
+        ))
+        assertFalse(BatterySysfsReader.shouldUpdateEstimatedFullChargeCapacity(
+            levelPercent = 99,
+            chargeCounterMicroAmpHours = 4_200_000L,
+            currentMicroAmps = 1_000L
+        ))
+        assertFalse(BatterySysfsReader.shouldUpdateEstimatedFullChargeCapacity(
+            levelPercent = 100,
+            chargeCounterMicroAmpHours = null,
+            currentMicroAmps = 1_000L
+        ))
+    }
+
+    @Test
+    fun staleCurrentSamplesDoNotProduceALiveDischargeRate() {
+        val current = sample(600_000L, 80).copy(
+            currentMicroAmps = null,
+            fullChargeCapacityMicroAmpHours = 5_000_000L
+        )
+        val result = BatteryStatsCalculator.calculateWindowed(
+            samples = listOf(
+                BatteryStatsCalculator.TimedSample(0L, 80, -500_000L, null)
+            ),
+            current = current,
+            isCharging = false
+        )
+        assertNull(result.currentMilliAmpsMagnitude)
+        assertNull(result.batteryPercentPerHour)
     }
 
     @Test
@@ -162,6 +243,34 @@ class BatteryStatsCalculatorTest {
         )
         assertEquals(274.0, result.currentMilliAmpsMagnitude!!, 0.01)
         assertEquals(5.48, result.batteryPercentPerHour!!, 0.01)
+    }
+
+    @Test
+    fun rollingSessionTotalsIncludeOnlyTheOverlapWithTheLast24Hours() {
+        val oneDayMs = 24L * 60L * 60L * 1_000L
+        val contribution = com.nlab.sysbattery.data.BatterySessionDbHelper.clipSessionToWindow(
+            sessionStartEpochMs = 0L,
+            sessionEndEpochMs = 2L * oneDayMs,
+            dropPercent = 8.0,
+            windowStartEpochMs = oneDayMs,
+            windowEndEpochMs = 2L * oneDayMs
+        )
+        assertEquals(4.0, contribution!!.first, 0.001)
+        assertEquals(oneDayMs, contribution.second)
+        assertNull(com.nlab.sysbattery.data.BatterySessionDbHelper.clipSessionToWindow(
+            sessionStartEpochMs = 0L,
+            sessionEndEpochMs = oneDayMs,
+            dropPercent = 5.0,
+            windowStartEpochMs = oneDayMs,
+            windowEndEpochMs = 2L * oneDayMs
+        ))
+    }
+
+    @Test
+    fun measuredSessionDropNeverExceedsStartingBatteryLevel() {
+        assertEquals(1.0, com.nlab.sysbattery.data.BatterySessionDbHelper.effectiveDropPercent(1, 1, 1.9), 0.0)
+        assertEquals(0.0, com.nlab.sysbattery.data.BatterySessionDbHelper.effectiveDropPercent(0, 0, 0.5), 0.0)
+        assertEquals(0.5, com.nlab.sysbattery.data.BatterySessionDbHelper.effectiveDropPercent(50, 0, 0.5), 0.0)
     }
 
     @Test
@@ -205,6 +314,37 @@ class BatteryStatsCalculatorTest {
                 elapsedMillis = 30L * 60_000L
             )
         )
+        assertNull(
+            com.nlab.sysbattery.data.BatterySessionDbHelper.calculateSessionRatePerHour(
+                startBatteryPercent = 1.0,
+                endBatteryPercent = -0.5,
+                elapsedMillis = 30L * 60_000L
+            )
+        )
+        assertNull(
+            com.nlab.sysbattery.data.BatterySessionDbHelper.calculateSessionRatePerHour(
+                startBatteryPercent = 101.0,
+                endBatteryPercent = 100.0,
+                elapsedMillis = 30L * 60_000L
+            )
+        )
+    }
+
+    @Test
+    fun currentRateRemainsUnavailableWhenCapacityIsMissing() {
+        val current = sample(30_000L, 80).copy(
+            currentMicroAmps = -500_000L,
+            fullChargeCapacityMicroAmpHours = null,
+            estimatedFullChargeCapacityMicroAmpHours = null,
+            designCapacityMicroAmpHours = null
+        )
+        val result = BatteryStatsCalculator.calculateWindowed(
+            samples = listOf(BatteryStatsCalculator.TimedSample(30_000L, 80, -500_000L, null)),
+            current = current,
+            isCharging = false
+        )
+        assertEquals(500.0, result.currentMilliAmpsMagnitude!!, 0.01)
+        assertNull(result.batteryPercentPerHour)
     }
 
     @Test

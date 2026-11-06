@@ -10,7 +10,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
-import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
 import android.widget.Toast
@@ -70,6 +69,7 @@ import com.nlab.sysbattery.ui.screens.AppUsageTab
 import com.nlab.sysbattery.ui.screens.SettingsTab
 import com.nlab.sysbattery.ui.screens.StatusTab
 import com.nlab.sysbattery.ui.theme.SysBatteryTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -85,7 +85,9 @@ class MainActivity : ComponentActivity() {
 
     private val exportDiagnostics = registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         if (uri != null) runCatching {
-            contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(DiagnosticLogger.readLogs()) }
+            val outputStream = contentResolver.openOutputStream(uri)
+                ?: error("Could not open the selected export destination")
+            outputStream.bufferedWriter().use { it.write(DiagnosticLogger.readLogs()) }
             Toast.makeText(this, "Diagnostics exported", Toast.LENGTH_SHORT).show()
         }.onFailure {
             DiagnosticLogger.error("Diagnostics export failed", it)
@@ -95,19 +97,21 @@ class MainActivity : ComponentActivity() {
 
     private var shizukuAuthorized by mutableStateOf(false)
     private var shizukuServiceBinding = false
+    private var shizukuServiceBound = false
     private var shizukuService: IBatteryStatsUserService? = null
 
     private val shizukuUserServiceArgs by lazy {
         Shizuku.UserServiceArgs(ComponentName(this, BatteryStatsUserService::class.java))
             .daemon(false)
             .tag("sysbattery-battery-stats")
-            .version(1)
+            .version(3)
     }
 
     private val shizukuServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             shizukuService = service?.let { IBatteryStatsUserService.Stub.asInterface(it) }
             shizukuServiceBinding = false
+            shizukuServiceBound = true
             runOnUiThread {
                 shizukuStatus = if (shizukuService != null) {
                     "Authorized · BatteryStats service connected"
@@ -119,9 +123,10 @@ class MainActivity : ComponentActivity() {
 
         override fun onServiceDisconnected(name: ComponentName?) {
             shizukuService = null
+            // A disconnected Android service remains bound and may reconnect automatically.
             shizukuServiceBinding = false
             runOnUiThread {
-                shizukuStatus = if (shizukuAuthorized) "Authorized · reconnect required" else "Shizuku disconnected"
+                shizukuStatus = if (shizukuAuthorized) "Authorized · reconnecting to BatteryStats service" else "Shizuku disconnected"
             }
         }
     }
@@ -145,13 +150,23 @@ class MainActivity : ComponentActivity() {
     private fun hasBatteryStatsPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.BATTERY_STATS) == PackageManager.PERMISSION_GRANTED
 
+    @Suppress("DEPRECATION")
     private fun hasUsageAccess(): Boolean {
         val appOps = getSystemService(AppOpsManager::class.java) ?: return false
-        return appOps.checkOpNoThrow(
-            AppOpsManager.OPSTR_GET_USAGE_STATS,
-            Process.myUid(),
-            packageName
-        ) == AppOpsManager.MODE_ALLOWED
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            appOps.unsafeCheckOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                Process.myUid(),
+                packageName
+            )
+        } else {
+            appOps.checkOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                Process.myUid(),
+                packageName
+            )
+        }
+        return mode == AppOpsManager.MODE_ALLOWED
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -223,8 +238,10 @@ class MainActivity : ComponentActivity() {
                 if (!shizukuLoading) {
                     shizukuLoading = true
                     coroutineScope.launch {
-                        val (report, findings, errorMsg) = withContext(Dispatchers.IO) {
+                        try {
+                            val (report, findings, errorMsg) = withContext(Dispatchers.IO) {
                             var shizukuItems = emptyList<RootBatteryStatsParser.Finding>()
+                            var uidPowerEstimates = emptyList<RootBatteryStatsParser.UidPowerEstimate>()
                             var shizukuErr: String? = null
                             val canUseShizuku = runCatching {
                                 Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
@@ -232,8 +249,13 @@ class MainActivity : ComponentActivity() {
                             if (canUseShizuku) {
                                 try {
                                     val service = shizukuService
-                                    if (service != null) shizukuItems = ShizukuBatteryStatsReader(service).read().findings
-                                    else shizukuErr = "Shizuku service is not connected yet. Tap Enable Shizuku access again."
+                                    if (service != null) {
+                                        val batteryStats = ShizukuBatteryStatsReader(service).read()
+                                        shizukuItems = batteryStats.findings
+                                        uidPowerEstimates = batteryStats.uidPowerEstimates
+                                    } else {
+                                        shizukuErr = "Shizuku service is not connected yet. Tap Enable Shizuku access again."
+                                    }
                                 } catch (e: Exception) {
                                     shizukuErr = e.message ?: e.javaClass.simpleName
                                 }
@@ -241,7 +263,9 @@ class MainActivity : ComponentActivity() {
                             var advReport: AdvancedBatteryStatsReader.Report? = null
                             var reportErr: String? = null
                             try {
-                                advReport = AdvancedBatteryStatsReader(applicationContext).read()
+                                advReport = AdvancedBatteryStatsReader(applicationContext).read(
+                                    uidPowerEstimates = uidPowerEstimates
+                                )
                             } catch (e: Exception) {
                                 reportErr = "Could not read standard statistics: ${e.javaClass.simpleName}"
                             }
@@ -252,10 +276,17 @@ class MainActivity : ComponentActivity() {
                             }
                             Triple(advReport, shizukuItems, combinedError)
                         }
-                        advancedReport = report
-                        shizukuFindings = findings
-                        advancedError = errorMsg
-                        shizukuLoading = false
+                            advancedReport = report
+                            shizukuFindings = findings
+                            advancedError = errorMsg
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            DiagnosticLogger.error("Advanced telemetry refresh failed", e)
+                            advancedError = "Could not refresh telemetry: ${e.javaClass.simpleName}"
+                        } finally {
+                            shizukuLoading = false
+                        }
                     }
                 }
             }
@@ -270,10 +301,12 @@ class MainActivity : ComponentActivity() {
                         SysBatteryTopBar(
                             running = running,
                             onToggleMonitor = {
-                                val next = !running
-                                if (next) BatteryMonitorService.start(this)
-                                else BatteryMonitorService.stop(this)
-                                running = next
+                                if (running) {
+                                    BatteryMonitorService.stop(this@MainActivity)
+                                    running = false
+                                } else {
+                                    running = BatteryMonitorService.start(this@MainActivity)
+                                }
                             }
                         )
                     },
@@ -346,7 +379,7 @@ class MainActivity : ComponentActivity() {
                                         rates = state.rates,
                                         session = state.session,
                                         running = running,
-                                        onStart = { BatteryMonitorService.start(this@MainActivity); running = true },
+                                        onStart = { running = BatteryMonitorService.start(this@MainActivity) },
                                         onStop = { BatteryMonitorService.stop(this@MainActivity); running = false },
                                         onBackground = { openBackgroundSettings() },
                                         batteryHistory = batteryHistory,
@@ -368,15 +401,17 @@ class MainActivity : ComponentActivity() {
                                         onRefreshAdvanced = refreshAdvanced,
                                         shizukuLoading = shizukuLoading,
                                         advancedReport = advancedReport,
-                                        advancedError = advancedError
+                                        advancedError = advancedError,
+                                        batteryStatsFindings = shizukuFindings,
+                                        sessionTelemetry = state.session,
+                                        batterySample = state.sample
                                     )
                                     2 -> SettingsTab(
                                         prefs = prefs,
                                         running = running,
                                         onMonitorEnabledChange = { enabled ->
                                             if (enabled) {
-                                                BatteryMonitorService.start(this@MainActivity)
-                                                running = true
+                                                running = BatteryMonitorService.start(this@MainActivity)
                                             } else {
                                                 BatteryMonitorService.stop(this@MainActivity)
                                                 running = false
@@ -402,11 +437,18 @@ class MainActivity : ComponentActivity() {
                                             if (!rootLoading) {
                                                 rootLoading = true
                                                 coroutineScope.launch {
-                                                    val report = withContext(Dispatchers.IO) {
-                                                        RootAccessReader().read()
+                                                    try {
+                                                        rootReport = withContext(Dispatchers.IO) {
+                                                            RootAccessReader().read()
+                                                        }
+                                                    } catch (e: CancellationException) {
+                                                        throw e
+                                                    } catch (e: Exception) {
+                                                        DiagnosticLogger.error("Root diagnostics refresh failed", e)
+                                                        Toast.makeText(this@MainActivity, "Root diagnostics failed", Toast.LENGTH_SHORT).show()
+                                                    } finally {
+                                                        rootLoading = false
                                                     }
-                                                    rootReport = report
-                                                    rootLoading = false
                                                 }
                                             }
                                         },
@@ -448,17 +490,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openBackgroundSettings() {
-        val powerManager = getSystemService(PowerManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && powerManager?.isIgnoringBatteryOptimizations(packageName) != true) {
-            try {
-                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = Uri.parse("package:$packageName")
-                })
-                return
-            } catch (_: Exception) {
-            }
-        }
         try {
+            // Open the system list instead of directly requesting a Doze exemption.
+            // The user chooses whether to exempt SysBattery from battery optimization.
             startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         } catch (_: Exception) {
             try {
@@ -473,11 +507,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         runCatching { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener) }
-        if (shizukuService != null || shizukuServiceBinding) {
+        if (shizukuServiceBound || shizukuServiceBinding) {
             runCatching { Shizuku.unbindUserService(shizukuUserServiceArgs, shizukuServiceConnection, true) }
         }
         shizukuService = null
         shizukuServiceBinding = false
+        shizukuServiceBound = false
         super.onDestroy()
     }
 
@@ -491,24 +526,25 @@ class MainActivity : ComponentActivity() {
             Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         }.getOrDefault(false)
         shizukuStatus = when {
+            !binderAlive -> if (available) "Shizuku installed · service not running" else "Shizuku not installed · optional"
+            !shizukuAuthorized -> "Shizuku running · permission needed"
             shizukuService != null -> "Authorized · BatteryStats service connected"
             shizukuServiceBinding -> "Authorized · connecting to BatteryStats service"
-            shizukuAuthorized -> "Authorized · connecting to BatteryStats service"
-            binderAlive -> "Shizuku running · permission needed"
-            available -> "Shizuku installed · service not running"
-            else -> "Shizuku not installed · optional"
+            shizukuServiceBound -> "Authorized · reconnecting to BatteryStats service"
+            else -> "Authorized · connecting to BatteryStats service"
         }
-        if (shizukuAuthorized && shizukuService == null) bindShizukuService()
+        if (shizukuAuthorized && shizukuService == null && !shizukuServiceBound) bindShizukuService()
     }
 
     private fun bindShizukuService() {
         val canBind = runCatching {
             Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         }.getOrDefault(false)
-        if (!canBind || shizukuService != null || shizukuServiceBinding) return
+        if (!canBind || shizukuService != null || shizukuServiceBinding || shizukuServiceBound) return
         shizukuServiceBinding = true
         try {
             Shizuku.bindUserService(shizukuUserServiceArgs, shizukuServiceConnection)
+            shizukuServiceBound = true
         } catch (e: Exception) {
             DiagnosticLogger.error("Failed to bind Shizuku BatteryStats service", e)
             shizukuServiceBinding = false

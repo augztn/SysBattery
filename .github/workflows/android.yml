@@ -23,8 +23,16 @@ jobs:
           gradle-version: '8.9'
       - name: Run unit tests
         run: gradle testDebugUnitTest
+      - name: Run Android lint
+        run: |
+          gradle lintDebug || {
+            cat app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt
+            exit 1
+          }
       - name: Build debug APK
         run: gradle assembleDebug
+      - name: Build minified release variant (unsigned)
+        run: gradle assembleRelease
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
+import android.os.SystemClock
 import java.io.File
 import java.io.IOException
 import kotlin.math.abs
@@ -28,7 +29,7 @@ class BatterySysfsReader(context: Context) {
     private var lastValidCurrentMicroAmps: Long? = null
 
     @Volatile
-    private var lastValidCurrentTimestampMs: Long = 0L
+    private var lastValidCurrentElapsedRealtimeMs: Long = 0L
 
     data class Snapshot(
         val timestampMillis: Long = System.currentTimeMillis(),
@@ -50,6 +51,7 @@ class BatterySysfsReader(context: Context) {
 
     fun readSnapshot(): Snapshot {
         val now = System.currentTimeMillis()
+        val nowElapsed = SystemClock.elapsedRealtime()
         val batteryIntent = try {
             appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         } catch (_: RuntimeException) {
@@ -84,9 +86,12 @@ class BatterySysfsReader(context: Context) {
 
         val current = if (primaryCurrent != null) {
             lastValidCurrentMicroAmps = primaryCurrent
-            lastValidCurrentTimestampMs = now
+            lastValidCurrentElapsedRealtimeMs = nowElapsed
             primaryCurrent
-        } else if (lastValidCurrentMicroAmps != null && (now - lastValidCurrentTimestampMs) <= 5_000L) {
+        } else if (
+            lastValidCurrentMicroAmps != null &&
+            isCurrentSampleFresh(nowElapsed, lastValidCurrentElapsedRealtimeMs)
+        ) {
             lastValidCurrentMicroAmps
         } else {
             normSysfsCurrent ?: normPropCurrent
@@ -133,12 +138,9 @@ class BatterySysfsReader(context: Context) {
             .safeInt("design_capacity_mah", 0)
             .takeIf { it in 500..20_000 }
             ?.let { it * 1_000L }
-        val fallbackCapacity = if (fullChargeCapacity == null && sysfsDesignCapacity == null && configuredDesignCapacity == null) {
-            (if (chargeCounter != null && level != null && level in 15..100) {
-                (chargeCounter * 100L / level).takeIf { it in 1_500_000L..25_000_000L }
-            } else null) ?: 5_000_000L
-        } else null
-        val designCapacity = sysfsDesignCapacity ?: configuredDesignCapacity ?: fallbackCapacity
+        // Design capacity is only a device-reported or user-configured value.
+        // A single charge-counter/percentage ratio is not a reliable design-capacity measurement.
+        val designCapacity = sysfsDesignCapacity ?: configuredDesignCapacity
         val systemCycleCount = if (Build.VERSION.SDK_INT >= 34) {
             batteryIntent?.getIntExtra(BatteryManager.EXTRA_CYCLE_COUNT, -1)?.takeIf { it >= 0 }
         } else null
@@ -149,10 +151,10 @@ class BatterySysfsReader(context: Context) {
             )
         )?.toInt()?.takeIf { it >= 0 }
 
-        if (level == 100 && chargeCounter != null && chargeCounter in 1_000_000L..30_000_000L &&
-            current != null && abs(current) in 1_000L..25_000_000L
-        ) {
-            estimatePrefs.edit().putLong("estimated_full_charge_capacity_uah", chargeCounter).apply()
+        if (shouldUpdateEstimatedFullChargeCapacity(level, chargeCounter, current)) {
+            chargeCounter?.let { measuredCapacity ->
+                estimatePrefs.edit().putLong("estimated_full_charge_capacity_uah", measuredCapacity).apply()
+            }
         }
         val estimatedFullChargeCapacity = estimatePrefs
             .safeLong("estimated_full_charge_capacity_uah", 0L)
@@ -208,7 +210,23 @@ class BatterySysfsReader(context: Context) {
     }
 
     companion object {
+        internal fun isCurrentSampleFresh(nowElapsedMs: Long, previousElapsedMs: Long): Boolean =
+            nowElapsedMs - previousElapsedMs in 0L..5_000L
+
+        internal fun shouldUpdateEstimatedFullChargeCapacity(
+            levelPercent: Int?,
+            chargeCounterMicroAmpHours: Long?,
+            currentMicroAmps: Long?
+        ): Boolean {
+            if (levelPercent != 100) return false
+            val chargeCounter = chargeCounterMicroAmpHours ?: return false
+            if (chargeCounter !in 1_000_000L..30_000_000L) return false
+            val current = currentMicroAmps ?: return false
+            return current in -25_000L..-1_000L || current in 1_000L..25_000L
+        }
+
         fun normalizeRawCurrentToMicroAmps(raw: Long, sourceKnownMicroAmps: Boolean = false): Long {
+            if (raw == Long.MIN_VALUE) return 0L
             val magnitude = abs(raw)
             if (magnitude <= 1L) return 0L
             if (magnitude > 20_000L || sourceKnownMicroAmps) return raw
