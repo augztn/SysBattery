@@ -37,7 +37,7 @@ object RootBatteryStatsParser {
             val match = uidLeadingEstimate.find(line) ?: return@forEach
             val uid = match.groupValues[1].removePrefix("UID").trim()
             val powerMah = match.groupValues[2].toDoubleOrNull() ?: return@forEach
-            val backgroundMah = Regex("""(?i)(?:^|\\s)bg\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)\\b""")
+            val backgroundMah = Regex("""(?i)(?:^|\s)bg\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\b""")
                 .find(match.groupValues[3])?.groupValues?.get(1)?.toDoubleOrNull()
                 ?.takeIf { it.isFinite() && it in 0.0..100_000.0 }
             if (uid.isNotBlank() && powerMah.isFinite() && powerMah in 0.0..100_000.0) {
