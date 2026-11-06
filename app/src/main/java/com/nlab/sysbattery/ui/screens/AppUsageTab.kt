@@ -54,7 +54,7 @@ fun AppUsageTab(
             CardSectionHeader(
                 icon = SysBatteryIcons.Apps,
                 title = "App Usage & Power",
-                subtitle = "Foreground activity & system attribution estimates"
+                subtitle = "Foreground activity, background transitions & Android power estimates"
             )
 
             if (!usageAccessGranted) {
@@ -140,9 +140,9 @@ fun AppUsageTab(
             GlassCard {
                 CardSectionHeader(
                     icon = SysBatteryIcons.Smartphone,
-                    title = "Foreground App Activity (24h)",
+                    title = "App Activity & Background Use (24h)",
                     subtitle = if (report.usage.isEmpty()) "No apps recorded yet"
-                    else "${report.usage.size} apps active in the last 24h"
+                    else "${report.usage.size} apps with recorded activity or power use"
                 )
 
                 if (report.usage.isEmpty()) {
@@ -208,10 +208,17 @@ fun AppUsageTab(
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         Text(
-                                            text = app.packageName,
+                                            text = app.appLabel,
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.SemiBold,
                                             color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = app.packageName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
@@ -223,19 +230,39 @@ fun AppUsageTab(
                                             trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                                             color = MaterialTheme.colorScheme.primary
                                         )
+                                        Text(
+                                            text = "Foreground ${formatDuration(app.foregroundMillis)} · Backgrounded ${app.backgroundTransitions}×",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
-                                    Text(
-                                        text = if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "${minutes}m",
-                                        fontFamily = JetBrainsMonoFamily,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = app.batteryMah?.let { String.format(Locale.US, "%.1f mAh", it) } ?: "—",
+                                            fontFamily = JetBrainsMonoFamily,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (app.batteryMah != null) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "${minutes}m",
+                                            fontFamily = JetBrainsMonoFamily,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
+
+                Text(
+                    text = "Backgrounded counts are foreground-to-background transitions, not background CPU time. mAh values are Android UID power estimates since the last charge when Shizuku data is available; shared UIDs are divided across their packages.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
 
                 Text(
                     text = "System Power Attribution",
@@ -260,7 +287,7 @@ fun AppUsageTab(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = "Privileged API Restricted",
+                            text = if (report.usage.any { it.batteryMah != null }) "Android BatteryStats" else "Per-app power data unavailable",
                             fontFamily = JetBrainsMonoFamily,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
@@ -276,4 +303,8 @@ fun AppUsageTab(
             }
         }
     }
+}
+private fun formatDuration(durationMillis: Long): String {
+    val minutes = durationMillis.coerceAtLeast(0L) / 60_000L
+    return if (minutes >= 60L) "${minutes / 60}h ${minutes % 60}m" else "${minutes}m"
 }
