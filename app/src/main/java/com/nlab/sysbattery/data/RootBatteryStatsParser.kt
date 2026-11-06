@@ -7,6 +7,7 @@ package com.nlab.sysbattery.data
  */
 object RootBatteryStatsParser {
     data class Finding(val label: String, val value: String)
+    data class UidPowerEstimate(val uid: String, val powerMah: Double)
 
     private val estimatedPower = Regex("""(?i)^\s*estimated power use(?:\s*\([^)]*\))?\s*:\s*(.+?)\s*$""")
     private val estimatedPowerSectionEnd = Regex("""(?i)^(?:battery history|statistics since|history|per-app|per application)\b.*$""")
@@ -21,6 +22,27 @@ object RootBatteryStatsParser {
     private val historyWakeLock = Regex("""(?i)(?:\+wake_lock=|wake_lock=|\+wakelock=)([^,\s]+)""")
     private val historyScreen = Regex("""(?i)(?:\+screen=|screen=)(on|off)\b""")
     private val historyState = Regex("""(?i)(\+running|\-running|\+wake_lock|\-wake_lock|\+sensor|\-sensor)\b""")
+
+    /** Returns Android's per-UID estimated energy rows from the Estimated power use section. */
+    fun parseUidPowerEstimates(output: String, maxRows: Int = 200): List<UidPowerEstimate> {
+        if (output.isBlank() || maxRows <= 0) return emptyList()
+        val rows = linkedMapOf<String, UidPowerEstimate>()
+        var inEstimatedPowerSection = false
+        output.lineSequence().forEach { raw ->
+            val line = raw.trim()
+            if (line.isEmpty()) return@forEach
+            if (estimatedPowerSectionEnd.matches(line)) inEstimatedPowerSection = false
+            if (line.startsWith("Estimated power use", ignoreCase = true)) inEstimatedPowerSection = true
+            if (!inEstimatedPowerSection) return@forEach
+            val match = uidLeadingEstimate.find(line) ?: return@forEach
+            val uid = match.groupValues[1].removePrefix("UID").trim()
+            val powerMah = match.groupValues[2].toDoubleOrNull() ?: return@forEach
+            if (uid.isNotBlank() && powerMah.isFinite() && powerMah in 0.0..100_000.0) {
+                rows.putIfAbsent(uid, UidPowerEstimate(uid, powerMah))
+            }
+        }
+        return rows.values.take(maxRows)
+    }
 
     fun parse(output: String, maxFindings: Int = 80): List<Finding> {
         if (output.isBlank() || maxFindings <= 0) return emptyList()
