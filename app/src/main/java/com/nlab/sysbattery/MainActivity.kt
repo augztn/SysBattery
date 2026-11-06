@@ -401,7 +401,8 @@ class MainActivity : ComponentActivity() {
                                         onRefreshAdvanced = refreshAdvanced,
                                         shizukuLoading = shizukuLoading,
                                         advancedReport = advancedReport,
-                                        advancedError = advancedError
+                                        advancedError = advancedError,
+                                        batteryStatsFindings = shizukuFindings
                                     )
                                     2 -> SettingsTab(
                                         prefs = prefs,
