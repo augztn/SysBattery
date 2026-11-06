@@ -55,6 +55,7 @@ class AdvancedBatteryStatsReader(context: Context) {
                 foregroundMillis = foreground[packageName] ?: 0L,
                 backgroundTransitions = activity?.count ?: 0,
                 lastBackgroundAtMillis = activity?.lastAtMillis,
+                standbyBucket = readStandbyBucket(packageName, start, now),
                 batteryMah = powerByPackage[packageName]?.totalMah,
                 backgroundBatteryMah = powerByPackage[packageName]?.backgroundMah
             )
