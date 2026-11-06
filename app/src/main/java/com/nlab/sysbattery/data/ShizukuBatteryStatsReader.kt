@@ -18,13 +18,15 @@ class ShizukuBatteryStatsReader(
         if (chargedOutput.startsWith("ERROR:")) {
             throw IllegalStateException(chargedOutput.removePrefix("ERROR:").trim())
         }
-        val historyOutput = service.readBatteryStatsHistory()
-        if (historyOutput.startsWith("ERROR:")) {
-            throw IllegalStateException(historyOutput.removePrefix("ERROR:").trim())
+        val historyOutput = runCatching { service.readBatteryStatsHistory() }
+            .getOrElse { "ERROR: ${it.message ?: it.javaClass.simpleName}" }
+        val historyFindings = if (historyOutput.startsWith("ERROR:")) {
+            listOf(RootBatteryStatsParser.Finding("History unavailable", historyOutput.removePrefix("ERROR:").trim()))
+        } else {
+            RootBatteryStatsParser.parse(historyOutput, maxFindings = 100)
         }
         val findings = (
-            RootBatteryStatsParser.parse(chargedOutput, maxFindings = 100) +
-                RootBatteryStatsParser.parse(historyOutput, maxFindings = 100)
+            RootBatteryStatsParser.parse(chargedOutput, maxFindings = 100) + historyFindings
             ).distinctBy { "${it.label}:${it.value}" }.take(160)
         return Report(
             findings = findings,
