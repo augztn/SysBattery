@@ -9,14 +9,20 @@ import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 
 /**
- * Shizuku User Service executes this fixed read-only query as shell.
+ * Shizuku User Service executes fixed, read-only BatteryStats queries.
  * No caller-provided command strings are accepted.
  */
 class BatteryStatsUserService : IBatteryStatsUserService.Stub() {
     @Throws(RemoteException::class)
-    override fun readChargedBatteryStats(): String {
+    override fun readChargedBatteryStats(): String = readBatteryStats("--charged")
+
+    @Throws(RemoteException::class)
+    override fun readBatteryStatsHistory(): String = readBatteryStats("--history")
+
+    private fun readBatteryStats(mode: String): String {
+        require(mode == "--charged" || mode == "--history") { "Unsupported BatteryStats query" }
         val process = try {
-            ProcessBuilder("dumpsys", "batterystats", "--charged")
+            ProcessBuilder("dumpsys", "batterystats", mode)
                 .redirectErrorStream(true)
                 .start()
         } catch (e: Exception) {
@@ -45,12 +51,13 @@ class BatteryStatsUserService : IBatteryStatsUserService.Stub() {
         return try {
             val exitCode = waitForProcessExit(process, TIMEOUT_SECONDS, TimeUnit.SECONDS)
             if (exitCode == null) {
+                terminateProcess(process)
                 outputTask.cancel(true)
                 "ERROR: BatteryStats command timed out."
             } else {
                 val output = outputTask.get(2, TimeUnit.SECONDS)
                 if (exitCode != 0) {
-                    "ERROR: dumpsys batterystats exited $exitCode: ${output.take(500)}"
+                    "ERROR: dumpsys batterystats $mode exited $exitCode: ${output.take(500)}"
                 } else {
                     output
                 }
