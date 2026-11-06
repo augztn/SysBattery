@@ -104,7 +104,7 @@ class MainActivity : ComponentActivity() {
         Shizuku.UserServiceArgs(ComponentName(this, BatteryStatsUserService::class.java))
             .daemon(false)
             .tag("sysbattery-battery-stats")
-            .version(2)
+            .version(3)
     }
 
     private val shizukuServiceConnection = object : ServiceConnection {
@@ -402,7 +402,9 @@ class MainActivity : ComponentActivity() {
                                         shizukuLoading = shizukuLoading,
                                         advancedReport = advancedReport,
                                         advancedError = advancedError,
-                                        batteryStatsFindings = shizukuFindings
+                                        batteryStatsFindings = shizukuFindings,
+                                        sessionTelemetry = state.session,
+                                        batterySample = state.sample
                                     )
                                     2 -> SettingsTab(
                                         prefs = prefs,
