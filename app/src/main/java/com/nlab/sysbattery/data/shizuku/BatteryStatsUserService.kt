@@ -19,14 +19,29 @@ class BatteryStatsUserService : IBatteryStatsUserService.Stub() {
     @Throws(RemoteException::class)
     override fun readBatteryStatsHistory(): String = readBatteryStats("--history")
 
+    @Throws(RemoteException::class)
+    override fun readAlarmStats(): String = readSystemDump("alarm")
+
+    @Throws(RemoteException::class)
+    override fun readJobSchedulerStats(): String = readSystemDump("jobscheduler")
+
     private fun readBatteryStats(mode: String): String {
         require(mode == "--charged" || mode == "--history") { "Unsupported BatteryStats query" }
+        return executeReadOnlyCommand(listOf("dumpsys", "batterystats", mode), "BatteryStats $mode")
+    }
+
+    private fun readSystemDump(serviceName: String): String {
+        require(serviceName == "alarm" || serviceName == "jobscheduler") { "Unsupported system dump" }
+        return executeReadOnlyCommand(listOf("dumpsys", serviceName), serviceName)
+    }
+
+    private fun executeReadOnlyCommand(command: List<String>, description: String): String {
         val process = try {
-            ProcessBuilder("dumpsys", "batterystats", mode)
+            ProcessBuilder(command)
                 .redirectErrorStream(true)
                 .start()
         } catch (e: Exception) {
-            return "ERROR: ${e.javaClass.simpleName}: ${e.message ?: "Could not start BatteryStats query"}"
+            return "ERROR: ${e.javaClass.simpleName}: ${e.message ?: "Could not start $description query"}"
         }
 
         val outputTask = FutureTask {
