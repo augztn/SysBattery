@@ -68,11 +68,11 @@ class BatteryStatsUserService : IBatteryStatsUserService.Stub() {
             if (exitCode == null) {
                 terminateProcess(process)
                 outputTask.cancel(true)
-                "ERROR: BatteryStats command timed out."
+                "ERROR: $description command timed out."
             } else {
                 val output = outputTask.get(2, TimeUnit.SECONDS)
                 if (exitCode != 0) {
-                    "ERROR: dumpsys batterystats $mode exited $exitCode: ${output.take(500)}"
+                    "ERROR: $description command exited $exitCode: ${output.take(500)}"
                 } else {
                     output
                 }
@@ -80,7 +80,7 @@ class BatteryStatsUserService : IBatteryStatsUserService.Stub() {
         } catch (e: Exception) {
             terminateProcess(process)
             outputTask.cancel(true)
-            "ERROR: ${e.javaClass.simpleName}: ${e.message ?: "BatteryStats query failed"}"
+            "ERROR: ${e.javaClass.simpleName}: ${e.message ?: "$description query failed"}"
         }
     }
 
