@@ -145,7 +145,7 @@ class AdvancedBatteryStatsReader(context: Context) {
     }
 
     private fun parseAndroidUid(rawUid: String): Int? {
-        val normalized = rawUid.trim().replaceFirst(Regex("""(?i)^UID\\s+"""), "").trim()
+        val normalized = rawUid.trim().replaceFirst(Regex("""(?i)^UID\s+"""), "").trim()
         normalized.toIntOrNull()?.let { return it.takeIf { value -> value >= 0 } }
         val appUid = Regex("""^u(\d+)a(\d+)$""", RegexOption.IGNORE_CASE).matchEntire(normalized)
             ?: return null
