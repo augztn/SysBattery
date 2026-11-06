@@ -251,7 +251,7 @@ fun AppUsageTab(
                                         )
                                         app.standbyBucket?.let { bucket ->
                                             Text(
-                                                text = "Standby: ${standbyBucketLabel(bucket)}",
+                                                text = "Last recorded standby change: ${standbyBucketLabel(bucket)}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.secondary
                                             )
