@@ -68,6 +68,22 @@ class AdvancedBatteryStatsReader(context: Context) {
         return Report(usage = usage, batteryStatsNotice = readEnergyNotice(uidPowerEstimates.isNotEmpty()))
     }
 
+    private fun readStandbyBucket(packageName: String, start: Long, end: Long): Int? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
+        return try {
+            val manager = appContext.getSystemService(UsageStatsManager::class.java) ?: return null
+            manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
+                .orEmpty()
+                .asSequence()
+                .filter { it.packageName == packageName }
+                .maxByOrNull { it.lastTimeUsed }
+                ?.appStandbyBucket
+        } catch (e: RuntimeException) {
+            DiagnosticLogger.warn("App standby bucket query failed", e)
+            null
+        }
+    }
+
     private data class BackgroundActivity(val count: Int, val lastAtMillis: Long)
 
     private fun readEnergyNotice(hasBatteryStats: Boolean): String {
