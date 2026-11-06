@@ -22,6 +22,7 @@ class AdvancedBatteryStatsReader(context: Context) {
         val foregroundMillis: Long,
         val backgroundTransitions: Int,
         val lastBackgroundAtMillis: Long?,
+        val standbyBucket: Int?,
         val batteryMah: Double?,
         val backgroundBatteryMah: Double?
     )
