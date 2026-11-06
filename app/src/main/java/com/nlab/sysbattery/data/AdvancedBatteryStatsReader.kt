@@ -41,6 +41,7 @@ class AdvancedBatteryStatsReader(context: Context) {
         val foreground = readForegroundUsage(start, now)
         val background = readBackgroundTransitions(start, now)
         val powerByPackage = resolveUidPower(uidPowerEstimates)
+        val standbyBuckets = readStandbyBuckets(start, now)
         val packageNames = (foreground.keys + background.keys + powerByPackage.keys).toSet()
 
         val usage = packageNames.map { packageName ->
@@ -55,7 +56,7 @@ class AdvancedBatteryStatsReader(context: Context) {
                 foregroundMillis = foreground[packageName] ?: 0L,
                 backgroundTransitions = activity?.count ?: 0,
                 lastBackgroundAtMillis = activity?.lastAtMillis,
-                standbyBucket = readStandbyBucket(packageName, start, now),
+                standbyBucket = standbyBuckets[packageName],
                 batteryMah = powerByPackage[packageName]?.totalMah,
                 backgroundBatteryMah = powerByPackage[packageName]?.backgroundMah
             )
@@ -68,19 +69,21 @@ class AdvancedBatteryStatsReader(context: Context) {
         return Report(usage = usage, batteryStatsNotice = readEnergyNotice(uidPowerEstimates.isNotEmpty()))
     }
 
-    private fun readStandbyBucket(packageName: String, start: Long, end: Long): Int? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
+    private fun readStandbyBuckets(start: Long, end: Long): Map<String, Int> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return emptyMap()
         return try {
-            val manager = appContext.getSystemService(UsageStatsManager::class.java) ?: return null
+            val manager = appContext.getSystemService(UsageStatsManager::class.java) ?: return emptyMap()
             manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
                 .orEmpty()
-                .asSequence()
-                .filter { it.packageName == packageName }
-                .maxByOrNull { it.lastTimeUsed }
-                ?.appStandbyBucket
+                .filter { it.packageName.isNotBlank() }
+                .groupBy { it.packageName }
+                .mapValues { (_, entries) ->
+                    entries.maxByOrNull { it.lastTimeUsed }?.appStandbyBucket ?: 0
+                }
+                .filterValues { it > 0 }
         } catch (e: RuntimeException) {
             DiagnosticLogger.warn("App standby bucket query failed", e)
-            null
+            emptyMap()
         }
     }
 
