@@ -241,6 +241,7 @@ class MainActivity : ComponentActivity() {
                         try {
                             val (report, findings, errorMsg) = withContext(Dispatchers.IO) {
                             var shizukuItems = emptyList<RootBatteryStatsParser.Finding>()
+                            var uidPowerEstimates = emptyList<RootBatteryStatsParser.UidPowerEstimate>()
                             var shizukuErr: String? = null
                             val canUseShizuku = runCatching {
                                 Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
@@ -248,8 +249,13 @@ class MainActivity : ComponentActivity() {
                             if (canUseShizuku) {
                                 try {
                                     val service = shizukuService
-                                    if (service != null) shizukuItems = ShizukuBatteryStatsReader(service).read().findings
-                                    else shizukuErr = "Shizuku service is not connected yet. Tap Enable Shizuku access again."
+                                    if (service != null) {
+                                        val batteryStats = ShizukuBatteryStatsReader(service).read()
+                                        shizukuItems = batteryStats.findings
+                                        uidPowerEstimates = batteryStats.uidPowerEstimates
+                                    } else {
+                                        shizukuErr = "Shizuku service is not connected yet. Tap Enable Shizuku access again."
+                                    }
                                 } catch (e: Exception) {
                                     shizukuErr = e.message ?: e.javaClass.simpleName
                                 }
@@ -257,7 +263,9 @@ class MainActivity : ComponentActivity() {
                             var advReport: AdvancedBatteryStatsReader.Report? = null
                             var reportErr: String? = null
                             try {
-                                advReport = AdvancedBatteryStatsReader(applicationContext).read()
+                                advReport = AdvancedBatteryStatsReader(applicationContext).read(
+                                    uidPowerEstimates = uidPowerEstimates
+                                )
                             } catch (e: Exception) {
                                 reportErr = "Could not read standard statistics: ${e.javaClass.simpleName}"
                             }
