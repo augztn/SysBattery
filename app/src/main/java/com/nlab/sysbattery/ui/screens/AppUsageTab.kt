@@ -30,6 +30,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nlab.sysbattery.data.AdvancedBatteryStatsReader
 import com.nlab.sysbattery.data.RootBatteryStatsParser
+import com.nlab.sysbattery.data.BatterySysfsReader
+import com.nlab.sysbattery.service.BatteryMonitorService
 import com.nlab.sysbattery.ui.components.CardSectionHeader
 import com.nlab.sysbattery.ui.components.GlassCard
 import com.nlab.sysbattery.ui.components.SysBatteryIcons
@@ -46,7 +48,9 @@ fun AppUsageTab(
     shizukuLoading: Boolean,
     advancedReport: AdvancedBatteryStatsReader.Report?,
     advancedError: String?,
-    batteryStatsFindings: List<RootBatteryStatsParser.Finding>
+    batteryStatsFindings: List<RootBatteryStatsParser.Finding>,
+    sessionTelemetry: BatteryMonitorService.SessionTelemetry,
+    batterySample: BatterySysfsReader.Snapshot?
 ) {
     val isLiquid = LocalLiquidTheme.current
     Column(
@@ -245,6 +249,13 @@ fun AppUsageTab(
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+                                        app.standbyBucket?.let { bucket ->
+                                            Text(
+                                                text = "Standby: ${standbyBucketLabel(bucket)}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.secondary
+                                            )
+                                        }
                                     }
                                     Column(horizontalAlignment = Alignment.End) {
                                         Text(
@@ -423,10 +434,148 @@ fun AppUsageTab(
                         )
                     }
                 }
+
+                // These are independent diagnostics: public monitor telemetry works without Shizuku,
+                // while alarm/job and detailed wake-lock records depend on system BatteryStats access.
+                GlassCard {
+                    CardSectionHeader(
+                        icon = SysBatteryIcons.Info,
+                        title = "Advanced Diagnostics",
+                        subtitle = "Screen-off behavior, background activity and system scheduling"
+                    )
+
+                    val screenOff = sessionTelemetry.screenOffMillis.coerceAtLeast(0L)
+                    val deepSleep = sessionTelemetry.deepSleepMillis.coerceIn(0L, screenOff)
+                    val sleepShare = if (screenOff > 0L) deepSleep.toDouble() / screenOff else 0.0
+                    Text(
+                        text = "Deep sleep analyzer",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (screenOff > 0L) {
+                            "Screen off ${formatDuration(screenOff)} · deep sleep ${formatDuration(deepSleep)} · estimated sleep share ${String.format(Locale.US, "%.0f%%", sleepShare * 100)}"
+                        } else "Collecting screen-off samples. Keep monitoring enabled while the display is off.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Deep sleep is inferred from elapsed time versus uptime deltas while monitoring; OEM kernel behavior can affect the estimate.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    val wakeLocks = batteryStatsFindings.filter {
+                        it.label == "Wake lock" || it.label == "History wake-lock event"
+                    }.distinctBy { it.value }.take(12)
+                    Text(
+                        text = "Wakelock inspector",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                    if (wakeLocks.isEmpty()) {
+                        Text(
+                            text = "No wake-lock records available. Shizuku or root BatteryStats history may be required.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else wakeLocks.forEach { finding ->
+                        Text(finding.value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+
+                    val networkComponents = batteryStatsFindings.filter {
+                        it.label == "Component estimate (mAh)" &&
+                            (it.value.contains("wifi", true) || it.value.contains("mobile_radio", true) ||
+                             it.value.contains("bluetooth", true) || it.value.contains("network", true))
+                    }
+                    Text(
+                        text = "Network & radio drain",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                    if (networkComponents.isEmpty()) {
+                        Text(
+                            text = "No radio-specific mAh estimates were exposed by this device. Android restricts per-app network byte history on ordinary installs.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else networkComponents.forEach { finding ->
+                        Text(finding.value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+
+                    val schedulerItems = batteryStatsFindings.filter {
+                        it.label == "Alarm activity" || it.label == "Scheduled job" ||
+                            it.label == "Alarm data unavailable" || it.label == "Job data unavailable"
+                    }.take(20)
+                    Text(
+                        text = "Alarm & job inspector",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                    if (schedulerItems.isEmpty()) {
+                        Text(
+                            text = "No scheduler records available. Refresh with Shizuku authorized to inspect dumpsys alarm and jobscheduler.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else schedulerItems.forEach { finding ->
+                        Text(
+                            text = "${finding.label}: ${finding.value}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Text(
+                        text = "Idle drain & anomaly checks",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                    Text(
+                        text = "Measured idle drain: ${String.format(Locale.US, "%.2f%%/h", sessionTelemetry.idleDrainRateValue.coerceAtLeast(0.0))} · deep-sleep drain: ${sessionTelemetry.deepSleepTimeDropText}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    val temperatureC = batterySample?.temperatureTenthsCelsius?.div(10.0)
+                    val anomalies = buildList {
+                        if (temperatureC != null && temperatureC >= 45.0) add("Battery temperature is high (${String.format(Locale.US, "%.1f°C", temperatureC)}).")
+                        if (sessionTelemetry.idleDrainRateValue >= 3.0) add("Idle drain is elevated (${String.format(Locale.US, "%.2f%%/h", sessionTelemetry.idleDrainRateValue)}).")
+                        if (sessionTelemetry.activeDrainRateValue >= 10.0) add("Active discharge is unusually high (${String.format(Locale.US, "%.2f%%/h", sessionTelemetry.activeDrainRateValue)}).")
+                    }
+                    if (anomalies.isEmpty()) {
+                        Text(
+                            text = "No threshold-based battery anomalies detected from the available samples.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else anomalies.forEach { message ->
+                        Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                    Text(
+                        text = "Anomaly thresholds are heuristic alerts, not battery fault diagnoses. Network byte attribution and per-package alarm/job ownership vary by Android version and OEM.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
 }
+private fun standbyBucketLabel(bucket: Int): String = when (bucket) {
+    5 -> "Active"
+    10 -> "Working set"
+    20 -> "Frequent"
+    30 -> "Rare"
+    40 -> "Restricted"
+    else -> "Unknown ($bucket)"
+}
+
 private fun formatDuration(durationMillis: Long): String {
     val minutes = durationMillis.coerceAtLeast(0L) / 60_000L
     return if (minutes >= 60L) "${minutes / 60}h ${minutes % 60}m" else "${minutes}m"
