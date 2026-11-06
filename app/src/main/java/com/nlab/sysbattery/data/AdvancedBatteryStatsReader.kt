@@ -69,20 +69,28 @@ class AdvancedBatteryStatsReader(context: Context) {
         return Report(usage = usage, batteryStatsNotice = readEnergyNotice(uidPowerEstimates.isNotEmpty()))
     }
 
+    /**
+     * UsageStats has no public per-package standby-bucket getter. Record the most recent
+     * STANDBY_BUCKET_CHANGED event in the requested window; packages without such an event
+     * deliberately remain unknown rather than displaying this app's own bucket as theirs.
+     */
     private fun readStandbyBuckets(start: Long, end: Long): Map<String, Int> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return emptyMap()
         return try {
             val manager = appContext.getSystemService(UsageStatsManager::class.java) ?: return emptyMap()
-            manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
-                .orEmpty()
-                .filter { it.packageName.isNotBlank() }
-                .groupBy { it.packageName }
-                .mapValues { (_, entries) ->
-                    entries.maxByOrNull { it.lastTimeUsed }?.appStandbyBucket ?: 0
-                }
-                .filterValues { it > 0 }
+            val events = manager.queryEvents(start, end) ?: return emptyMap()
+            val buckets = mutableMapOf<String, Int>()
+            val event = UsageEvents.Event()
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event)
+                if (event.eventType != UsageEvents.Event.STANDBY_BUCKET_CHANGED) continue
+                val packageName = event.packageName?.takeIf { it.isNotBlank() } ?: continue
+                val bucket = event.appStandbyBucket
+                if (bucket > 0) buckets[packageName] = bucket
+            }
+            buckets
         } catch (e: RuntimeException) {
-            DiagnosticLogger.warn("App standby bucket query failed", e)
+            DiagnosticLogger.warn("App standby bucket event query failed", e)
             emptyMap()
         }
     }
