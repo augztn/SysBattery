@@ -312,39 +312,114 @@ fun AppUsageTab(
                     }
                 }
 
+                val componentPower = batteryStatsFindings
+                    .filter { it.label == "Component estimate (mAh)" }
+                    .mapNotNull { finding ->
+                        Regex("""^([a-z_ ]+):\\s*([0-9]+(?:\\.[0-9]+)?)""", RegexOption.IGNORE_CASE)
+                            .find(finding.value)
+                            ?.let { match ->
+                                val mah = match.groupValues[2].toDoubleOrNull() ?: return@let null
+                                match.groupValues[1].replace('_', ' ').trim() to mah
+                            }
+                    }
+                    .distinctBy { it.first.lowercase() }
+                    .sortedByDescending { it.second }
+
                 Text(
-                    text = "System Power Attribution",
+                    text = "Battery Drain Attribution",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(top = 6.dp)
                 )
-
                 Surface(
                     shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    border = if (isLiquid) {
-                        BorderStroke(1.dp, liquidBorderBrush(0.75f))
-                    } else {
-                        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
-                    }
+                    border = if (isLiquid) BorderStroke(1.dp, liquidBorderBrush(0.75f))
+                    else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
                 ) {
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(
-                            text = if (report.usage.any { it.batteryMah != null }) "Android BatteryStats" else "Per-app power data unavailable",
-                            fontFamily = JetBrainsMonoFamily,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                            text = "System components",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (componentPower.isEmpty()) {
+                            Text(
+                                text = "Component-level mAh estimates are unavailable. Connect Shizuku or use a supported root BatteryStats source, then refresh.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            val maxMah = componentPower.maxOf { it.second }.coerceAtLeast(0.001)
+                            componentPower.forEach { (name, mah) ->
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = name.replaceFirstChar { it.uppercase() },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            text = String.format(Locale.US, "%.1f mAh", mah),
+                                            fontFamily = JetBrainsMonoFamily,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    LinearProgressIndicator(
+                                        progress = { (mah / maxMah).toFloat().coerceIn(0f, 1f) },
+                                        modifier = Modifier.fillMaxWidth().height(5.dp),
+                                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                                    )
+                                }
+                            }
+                        }
+                        Text(
+                            text = "Includes available CPU, screen, Wi-Fi, mobile radio, Bluetooth, GPS, sensors and wakelock component estimates. Android/OEM BatteryStats decides which components are reported.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = report.batteryStatsNotice,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall
+                            text = "Wake-lock activity",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        val wakeLocks = batteryStatsFindings.filter {
+                            it.label == "Wake lock" || it.label == "History wake-lock event"
+                        }.distinctBy { it.value }.take(10)
+                        if (wakeLocks.isEmpty()) {
+                            Text(
+                                text = "No wake-lock entries were available in the current BatteryStats output.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            wakeLocks.forEach { finding ->
+                                Text(
+                                    text = finding.value,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Text(
+                            text = if (report.usage.any { it.batteryMah != null }) report.batteryStatsNotice
+                            else "Per-app mAh attribution is unavailable without authorized BatteryStats access.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "These are Android model-based estimates and activity correlations, not direct measurements or proof that a component/app caused the drain. Wake-lock names and history events are not always attributable to a package.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
