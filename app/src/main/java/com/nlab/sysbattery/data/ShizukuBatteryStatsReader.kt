@@ -14,13 +14,21 @@ class ShizukuBatteryStatsReader(
     )
 
     fun read(): Report {
-        val output = service.readChargedBatteryStats()
-        if (output.startsWith("ERROR:")) {
-            throw IllegalStateException(output.removePrefix("ERROR:").trim())
+        val chargedOutput = service.readChargedBatteryStats()
+        if (chargedOutput.startsWith("ERROR:")) {
+            throw IllegalStateException(chargedOutput.removePrefix("ERROR:").trim())
         }
+        val historyOutput = service.readBatteryStatsHistory()
+        if (historyOutput.startsWith("ERROR:")) {
+            throw IllegalStateException(historyOutput.removePrefix("ERROR:").trim())
+        }
+        val findings = (
+            RootBatteryStatsParser.parse(chargedOutput, maxFindings = 100) +
+                RootBatteryStatsParser.parse(historyOutput, maxFindings = 100)
+            ).distinctBy { "${it.label}:${it.value}" }.take(160)
         return Report(
-            findings = RootBatteryStatsParser.parse(output, maxFindings = 100),
-            uidPowerEstimates = RootBatteryStatsParser.parseUidPowerEstimates(output)
+            findings = findings,
+            uidPowerEstimates = RootBatteryStatsParser.parseUidPowerEstimates(chargedOutput)
         )
     }
 }
