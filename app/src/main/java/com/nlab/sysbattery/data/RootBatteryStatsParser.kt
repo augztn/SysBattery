@@ -23,6 +23,25 @@ object RootBatteryStatsParser {
     private val historyScreen = Regex("""(?i)(?:\+screen=|screen=)(on|off)\b""")
     private val historyState = Regex("""(?i)(\+running|\-running|\+wake_lock|\-wake_lock|\+sensor|\-sensor)\b""")
 
+    /** Extracts a bounded, read-only preview of alarm/job records from dumpsys output. */
+    fun parseSchedulerDump(output: String, label: String, maxFindings: Int = 40): List<Finding> {
+        if (output.isBlank() || maxFindings <= 0) return emptyList()
+        val isAlarm = label.equals("Alarm", ignoreCase = true)
+        val pattern = if (isAlarm) {
+            Regex("""(?i)(alarm stats|wakeup|pending alarm|alarmclock|RTC_WAKEUP|ELAPSED_REALTIME_WAKEUP|com\\.[a-z0-9_.]+)""")
+        } else {
+            Regex("""(?i)(JOB #|JobStatus|jobstatus|scheduled jobs|running jobs|service:|com\\.[a-z0-9_.]+)""")
+        }
+        return output.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && pattern.containsMatchIn(it) }
+            .filterNot { it.startsWith("ERROR:", ignoreCase = true) }
+            .distinct()
+            .take(maxFindings)
+            .map { Finding(if (isAlarm) "Alarm activity" else "Scheduled job", it.take(220)) }
+            .toList()
+    }
+
     /** Returns Android's per-UID estimated energy rows from the Estimated power use section. */
     fun parseUidPowerEstimates(output: String, maxRows: Int = 200): List<UidPowerEstimate> {
         if (output.isBlank() || maxRows <= 0) return emptyList()
