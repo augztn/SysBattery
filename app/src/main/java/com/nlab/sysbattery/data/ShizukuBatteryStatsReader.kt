@@ -9,7 +9,8 @@ class ShizukuBatteryStatsReader(
     private val service: IBatteryStatsUserService
 ) {
     data class Report(
-        val findings: List<RootBatteryStatsParser.Finding>
+        val findings: List<RootBatteryStatsParser.Finding>,
+        val uidPowerEstimates: List<RootBatteryStatsParser.UidPowerEstimate>
     )
 
     fun read(): Report {
@@ -18,7 +19,8 @@ class ShizukuBatteryStatsReader(
             throw IllegalStateException(output.removePrefix("ERROR:").trim())
         }
         return Report(
-            findings = RootBatteryStatsParser.parse(output, maxFindings = 100)
+            findings = RootBatteryStatsParser.parse(output, maxFindings = 100),
+            uidPowerEstimates = RootBatteryStatsParser.parseUidPowerEstimates(output)
         )
     }
 }
