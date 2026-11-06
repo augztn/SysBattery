@@ -71,16 +71,16 @@ class AdvancedBatteryStatsReader(context: Context) {
             return "Per-app mAh values are Android BatteryStats UID estimates supplied by Shizuku. Shared Android UIDs are grouped; these are estimates, not direct electrical measurements."
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            return "Per-app energy estimates depend on Android BatteryStats support. Enable Shizuku or root for system-reported UID estimates."
+            return "Per-app energy estimates depend on Android BatteryStats support. Enable Shizuku for system-reported UID estimates."
         }
         if (ContextCompat.checkSelfPermission(
                 appContext,
                 android.Manifest.permission.BATTERY_STATS
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            return "Android restricts per-app power attribution for ordinary installs. Usage Access provides foreground and background-transition activity; Shizuku or root can add Android-reported UID mAh estimates."
+            return "Android restricts per-app power attribution for ordinary installs. Usage Access provides foreground and background-transition activity; Shizuku can add Android-reported UID mAh estimates."
         }
-        return "Direct BatteryUsageStats access is not exposed to this app. Use Shizuku or root for Android-reported UID mAh estimates."
+        return "Direct BatteryUsageStats access is not exposed to this app. Use Shizuku for Android-reported UID mAh estimates."
     }
 
     private fun readForegroundUsage(start: Long, end: Long): Map<String, Long> {
