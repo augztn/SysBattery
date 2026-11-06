@@ -21,6 +21,33 @@ class RootBatteryStatsParserTest {
         assertTrue(findings.any { it.label == "UID estimate (mAh)" && it.value.contains("u0a123") })
     }
 
+    @Test fun parsesStructuredPerUidPowerEstimatesOnlyInsideEstimatedPowerSection() {
+        val output = """
+            Estimated power use (mAh):
+              UID u0a446: 296 fg: 115 bg: 6.94
+              UID 10123: 12.5
+            Battery History:
+              UID u0a999: 900
+        """.trimIndent()
+
+        val estimates = RootBatteryStatsParser.parseUidPowerEstimates(output)
+        assertEquals(2, estimates.size)
+        assertEquals("u0a446", estimates[0].uid)
+        assertEquals(296.0, estimates[0].powerMah, 0.001)
+        assertEquals("10123", estimates[1].uid)
+        assertEquals(12.5, estimates[1].powerMah, 0.001)
+    }
+
+    @Test fun rejectsInvalidUidPowerEstimates() {
+        val output = """
+            Estimated power use (mAh):
+              UID u0a446: -4
+              UID u0a447: NaN
+              UID u0a448: 120000
+        """.trimIndent()
+        assertTrue(RootBatteryStatsParser.parseUidPowerEstimates(output).isEmpty())
+    }
+
     @Test fun stopsComponentEstimatesWhenBatteryHistoryBegins() {
         val findings = RootBatteryStatsParser.parse(
             """
