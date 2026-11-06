@@ -34,6 +34,7 @@ class RootBatteryStatsParserTest {
         assertEquals(2, estimates.size)
         assertEquals("u0a446", estimates[0].uid)
         assertEquals(296.0, estimates[0].powerMah, 0.001)
+        assertEquals(6.94, estimates[0].backgroundPowerMah!!, 0.001)
         assertEquals("10123", estimates[1].uid)
         assertEquals(12.5, estimates[1].powerMah, 0.001)
     }
