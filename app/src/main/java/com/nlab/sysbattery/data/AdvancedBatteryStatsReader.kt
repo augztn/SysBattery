@@ -22,7 +22,8 @@ class AdvancedBatteryStatsReader(context: Context) {
         val foregroundMillis: Long,
         val backgroundTransitions: Int,
         val lastBackgroundAtMillis: Long?,
-        val batteryMah: Double?
+        val batteryMah: Double?,
+        val backgroundBatteryMah: Double?
     )
 
     data class Report(
@@ -53,10 +54,11 @@ class AdvancedBatteryStatsReader(context: Context) {
                 foregroundMillis = foreground[packageName] ?: 0L,
                 backgroundTransitions = activity?.count ?: 0,
                 lastBackgroundAtMillis = activity?.lastAtMillis,
-                batteryMah = powerByPackage[packageName]
+                batteryMah = powerByPackage[packageName]?.totalMah,
+                backgroundBatteryMah = powerByPackage[packageName]?.backgroundMah
             )
         }.sortedWith(
-            compareByDescending<AppUsage> { it.batteryMah ?: -1.0 }
+            compareByDescending<AppUsage> { it.backgroundBatteryMah ?: it.batteryMah ?: -1.0 }
                 .thenByDescending { it.foregroundMillis }
                 .thenBy { it.appLabel.lowercase() }
         )
@@ -123,11 +125,13 @@ class AdvancedBatteryStatsReader(context: Context) {
         }
     }
 
+    private data class AppPowerEstimate(val totalMah: Double, val backgroundMah: Double?)
+
     private fun resolveUidPower(
         estimates: List<RootBatteryStatsParser.UidPowerEstimate>
-    ): Map<String, Double> {
+    ): Map<String, AppPowerEstimate> {
         if (estimates.isEmpty()) return emptyMap()
-        val result = mutableMapOf<String, Double>()
+        val result = mutableMapOf<String, AppPowerEstimate>()
         estimates.forEach { estimate ->
             val uid = parseAndroidUid(estimate.uid) ?: return@forEach
             val packages = runCatching { appContext.packageManager.getPackagesForUid(uid).orEmpty() }
@@ -137,8 +141,19 @@ class AdvancedBatteryStatsReader(context: Context) {
             // A shared UID is one Android accounting bucket. Divide its estimate evenly so
             // the app list does not double-count the same UID total.
             val perPackageMah = estimate.powerMah / packages.size
+            val perPackageBackgroundMah = estimate.backgroundPowerMah?.div(packages.size)
             packages.forEach { packageName ->
-                result[packageName] = (result[packageName] ?: 0.0) + perPackageMah
+                val previous = result[packageName]
+                val backgroundMah = when {
+                    previous?.backgroundMah != null && perPackageBackgroundMah != null ->
+                        previous.backgroundMah + perPackageBackgroundMah
+                    previous?.backgroundMah != null -> previous.backgroundMah
+                    else -> perPackageBackgroundMah
+                }
+                result[packageName] = AppPowerEstimate(
+                    totalMah = (previous?.totalMah ?: 0.0) + perPackageMah,
+                    backgroundMah = backgroundMah
+                )
             }
         }
         return result
