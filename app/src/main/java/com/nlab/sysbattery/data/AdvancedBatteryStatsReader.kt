@@ -5,7 +5,6 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.UserHandle
 import androidx.core.content.ContextCompat
 import com.nlab.sysbattery.diagnostics.DiagnosticLogger
 import java.util.concurrent.TimeUnit
@@ -153,6 +152,7 @@ class AdvancedBatteryStatsReader(context: Context) {
         val userId = appUid.groupValues[1].toIntOrNull() ?: return null
         val appId = appUid.groupValues[2].toIntOrNull() ?: return null
         if (appId !in 0..99_999 || userId !in 0..99_999) return null
-        return UserHandle.getUid(userId, 10_000 + appId)
+        val uid = userId.toLong() * 100_000L + 10_000L + appId
+        return uid.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt()
     }
 }
