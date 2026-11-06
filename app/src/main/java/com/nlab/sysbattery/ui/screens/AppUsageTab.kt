@@ -248,7 +248,9 @@ fun AppUsageTab(
                                     }
                                     Column(horizontalAlignment = Alignment.End) {
                                         Text(
-                                            text = app.batteryMah?.let { String.format(Locale.US, "%.1f mAh", it) } ?: "—",
+                                            text = app.backgroundBatteryMah?.let { String.format(Locale.US, "%.1f bg mAh", it) }
+                                                ?: app.batteryMah?.let { String.format(Locale.US, "%.1f mAh", it) }
+                                                ?: "—",
                                             fontFamily = JetBrainsMonoFamily,
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.Bold,
@@ -269,7 +271,7 @@ fun AppUsageTab(
                 }
 
                 Text(
-                    text = "Backgrounded counts are foreground-to-background transitions, not background CPU time. mAh values are Android UID power estimates since the last charge when Shizuku data is available; shared UIDs are divided across their packages.",
+                    text = "Backgrounded counts are app transitions, not background CPU time. Some OEM BatteryStats rows expose a separate background mAh estimate; otherwise the value shown is total UID mAh since the last charge. Shared UIDs are divided across their packages.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
