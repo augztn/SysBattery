@@ -21,8 +21,12 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -53,6 +57,7 @@ fun AppUsageTab(
     batterySample: BatterySysfsReader.Snapshot?
 ) {
     val isLiquid = LocalLiquidTheme.current
+    val selectedSection = remember { mutableIntStateOf(0) }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -143,8 +148,14 @@ fun AppUsageTab(
             }
         }
 
+        TabRow(selectedTabIndex = selectedSection.intValue) {
+            Tab(selected = selectedSection.intValue == 0, onClick = { selectedSection.intValue = 0 }, text = { Text("App Usage") })
+            Tab(selected = selectedSection.intValue == 1, onClick = { selectedSection.intValue = 1 }, text = { Text("Background Activity") })
+        }
+
         advancedReport?.let { report ->
             GlassCard {
+                if (selectedSection.intValue == 0) {
                 CardSectionHeader(
                     icon = SysBatteryIcons.Smartphone,
                     title = "App Activity & Background Use (24h)",
@@ -245,17 +256,10 @@ fun AppUsageTab(
                                             color = MaterialTheme.colorScheme.primary
                                         )
                                         Text(
-                                            text = backgroundSummary,
+                                            text = "Foreground ${formatDuration(app.foregroundMillis)}",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
-                                        app.standbyBucket?.let { bucket ->
-                                            Text(
-                                                text = "Last recorded standby change: ${standbyBucketLabel(bucket)}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.secondary
-                                            )
-                                        }
                                     }
                                     Column(horizontalAlignment = Alignment.End) {
                                         Text(
@@ -286,6 +290,64 @@ fun AppUsageTab(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
+                }
+
+                if (selectedSection.intValue == 1) {
+                    CardSectionHeader(
+                        icon = SysBatteryIcons.Info,
+                        title = "Background Activity (24h)",
+                        subtitle = "App background transitions, standby state and system activity"
+                    )
+                    val backgroundApps = report.usage
+                        .filter { it.backgroundTransitions > 0 || it.backgroundBatteryMah != null || it.standbyBucket != null }
+                        .sortedWith(
+                            compareByDescending<AdvancedBatteryStatsReader.AppUsage> {
+                                it.backgroundBatteryMah ?: it.batteryMah ?: -1.0
+                            }.thenByDescending { it.backgroundTransitions }
+                        )
+                    if (backgroundApps.isEmpty()) {
+                        Text(
+                            text = "No background activity records are available. Enable Usage Access and refresh; Shizuku may provide additional BatteryStats data.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        backgroundApps.take(20).forEach { app ->
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Text(app.appLabel, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    text = "${app.packageName} · Backgrounded ${app.backgroundTransitions}×" +
+                                        (app.lastBackgroundAtMillis?.let {
+                                            " · last " + DateUtils.getRelativeTimeSpanString(it, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
+                                        } ?: ""),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = app.standbyBucket?.let { "Last recorded standby change: ${standbyBucketLabel(it)}" }
+                                        ?: "Standby state: unavailable",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                                Text(
+                                    text = app.backgroundBatteryMah?.let { String.format(Locale.US, "Background estimate %.1f mAh", it) }
+                                        ?: app.batteryMah?.let { String.format(Locale.US, "Total UID estimate %.1f mAh (background split unavailable)", it) }
+                                        ?: "Battery estimate unavailable",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        text = "Backgrounded counts are app transitions, not background CPU time. OEM background mAh is shown only when Android exposes it; otherwise total UID mAh is clearly labeled and is not treated as background-only usage.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
                 val screenOffSignals = batteryStatsFindings.filter {
                     it.label == "Wake lock" || it.label == "History wake-lock event" || it.label == "History screen state"
@@ -562,6 +624,7 @@ fun AppUsageTab(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
                 }
             }
         }
