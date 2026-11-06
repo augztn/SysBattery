@@ -28,9 +28,9 @@ object RootBatteryStatsParser {
         if (output.isBlank() || maxFindings <= 0) return emptyList()
         val isAlarm = label.equals("Alarm", ignoreCase = true)
         val pattern = if (isAlarm) {
-            Regex("""(?i)(alarm stats|wakeup|pending alarm|alarmclock|RTC_WAKEUP|ELAPSED_REALTIME_WAKEUP|com\\.[a-z0-9_.]+)""")
+            Regex("""(?i)(alarm stats|wakeup|pending alarm|alarmclock|RTC_WAKEUP|ELAPSED_REALTIME_WAKEUP|(?:com|org|net|io)\.[a-z0-9_.]+)""")
         } else {
-            Regex("""(?i)(JOB #|JobStatus|jobstatus|scheduled jobs|running jobs|service:|com\\.[a-z0-9_.]+)""")
+            Regex("""(?i)(JOB #|JobStatus|jobstatus|scheduled jobs|running jobs|service:|(?:com|org|net|io)\.[a-z0-9_.]+)""")
         }
         return output.lineSequence()
             .map { it.trim() }
