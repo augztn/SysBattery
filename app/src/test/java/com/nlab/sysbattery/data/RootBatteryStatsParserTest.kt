@@ -95,6 +95,26 @@ class RootBatteryStatsParserTest {
         assertTrue(findings.any { it.label == "UID estimate (mAh)" && it.value.startsWith("UID u0a446: 296") })
     }
 
+    @Test fun parsesAlarmAndJobSchedulerRecords() {
+        val alarms = RootBatteryStatsParser.parseSchedulerDump(
+            """
+            Alarm Stats:
+              com.example.music +4m12s running, 12 wakeups
+              RTC_WAKEUP #0: com.example.sync
+            """.trimIndent(),
+            "Alarm"
+        )
+        val jobs = RootBatteryStatsParser.parseSchedulerDump(
+            """
+            JOB #u0a123/42: com.example.worker/.SyncJobService
+            JobStatus{abc u0a123 com.example.backup/.Job}
+            """.trimIndent(),
+            "Job"
+        )
+        assertTrue(alarms.any { it.label == "Alarm activity" && it.value.contains("com.example.music") })
+        assertTrue(jobs.any { it.label == "Scheduled job" && it.value.contains("com.example.worker") })
+    }
+
     @Test fun ignoresEmptyAndBoundsOutput() {
         assertEquals(0, RootBatteryStatsParser.parse("").size)
         assertEquals(2, RootBatteryStatsParser.parse("capacity: 4000\ncapacity: 4200", maxFindings = 2).size)
