@@ -190,13 +190,6 @@ fun AppUsageTab(
                         report.usage.take(12).forEach { app ->
                             val minutes = app.foregroundMillis / 60_000L
                             val fraction = (app.foregroundMillis.toFloat() / maxForeground).coerceIn(0f, 1f)
-                            val backgroundSummary = buildString {
-                                append("Foreground ${formatDuration(app.foregroundMillis)} · Backgrounded ${app.backgroundTransitions}×")
-                                app.lastBackgroundAtMillis?.let {
-                                    append(" · last ")
-                                    append(DateUtils.getRelativeTimeSpanString(it, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS))
-                                }
-                            }
                             Surface(
                                 shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
                                 color = MaterialTheme.colorScheme.surfaceContainerLow,
