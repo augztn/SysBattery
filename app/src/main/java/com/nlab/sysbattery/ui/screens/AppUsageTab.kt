@@ -1,5 +1,6 @@
 package com.nlab.sysbattery.ui.screens
 
+import android.text.format.DateUtils
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nlab.sysbattery.data.AdvancedBatteryStatsReader
+import com.nlab.sysbattery.data.RootBatteryStatsParser
 import com.nlab.sysbattery.ui.components.CardSectionHeader
 import com.nlab.sysbattery.ui.components.GlassCard
 import com.nlab.sysbattery.ui.components.SysBatteryIcons
@@ -43,7 +45,8 @@ fun AppUsageTab(
     onRefreshAdvanced: () -> Unit,
     shizukuLoading: Boolean,
     advancedReport: AdvancedBatteryStatsReader.Report?,
-    advancedError: String?
+    advancedError: String?,
+    batteryStatsFindings: List<RootBatteryStatsParser.Finding>
 ) {
     val isLiquid = LocalLiquidTheme.current
     Column(
@@ -172,6 +175,13 @@ fun AppUsageTab(
                         report.usage.take(12).forEach { app ->
                             val minutes = app.foregroundMillis / 60_000L
                             val fraction = (app.foregroundMillis.toFloat() / maxForeground).coerceIn(0f, 1f)
+                            val backgroundSummary = buildString {
+                                append("Foreground ${formatDuration(app.foregroundMillis)} · Backgrounded ${app.backgroundTransitions}×")
+                                app.lastBackgroundAtMillis?.let {
+                                    append(" · last ")
+                                    append(DateUtils.getRelativeTimeSpanString(it, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS))
+                                }
+                            }
                             Surface(
                                 shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
                                 color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -231,7 +241,7 @@ fun AppUsageTab(
                                             color = MaterialTheme.colorScheme.primary
                                         )
                                         Text(
-                                            text = "Foreground ${formatDuration(app.foregroundMillis)} · Backgrounded ${app.backgroundTransitions}×",
+                                            text = backgroundSummary,
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -263,6 +273,42 @@ fun AppUsageTab(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
+                val screenOffSignals = batteryStatsFindings.filter {
+                    it.label == "Wake lock" || it.label == "History wake-lock event" || it.label == "History screen state"
+                }.distinctBy { "${it.label}:${it.value}" }.take(8)
+                if (screenOffSignals.isNotEmpty()) {
+                    Text(
+                        text = "Screen-off activity signals",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(if (isLiquid) 16.dp else 14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        border = if (isLiquid) BorderStroke(1.dp, liquidBorderBrush(0.75f))
+                        else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            screenOffSignals.forEach { finding ->
+                                Text(
+                                    text = "${finding.label}: ${finding.value}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = "These are system history signals. A wake-lock name is not always enough to identify the responsible app.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
 
                 Text(
                     text = "System Power Attribution",
