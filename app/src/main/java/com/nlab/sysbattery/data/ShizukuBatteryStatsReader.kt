@@ -25,9 +25,21 @@ class ShizukuBatteryStatsReader(
         } else {
             RootBatteryStatsParser.parse(historyOutput, maxFindings = 100)
         }
+        val alarmOutput = runCatching { service.readAlarmStats() }
+            .getOrElse { "ERROR: ${it.message ?: it.javaClass.simpleName}" }
+        val jobOutput = runCatching { service.readJobSchedulerStats() }
+            .getOrElse { "ERROR: ${it.message ?: it.javaClass.simpleName}" }
+        val schedulerFindings = buildList {
+            if (alarmOutput.startsWith("ERROR:")) {
+                add(RootBatteryStatsParser.Finding("Alarm data unavailable", alarmOutput.removePrefix("ERROR:").trim()))
+            } else addAll(RootBatteryStatsParser.parseSchedulerDump(alarmOutput, "Alarm", 30))
+            if (jobOutput.startsWith("ERROR:")) {
+                add(RootBatteryStatsParser.Finding("Job data unavailable", jobOutput.removePrefix("ERROR:").trim()))
+            } else addAll(RootBatteryStatsParser.parseSchedulerDump(jobOutput, "Job", 30))
+        }
         val findings = (
-            RootBatteryStatsParser.parse(chargedOutput, maxFindings = 100) + historyFindings
-            ).distinctBy { "${it.label}:${it.value}" }.take(160)
+            RootBatteryStatsParser.parse(chargedOutput, maxFindings = 100) + historyFindings + schedulerFindings
+            ).distinctBy { "${it.label}:${it.value}" }.take(220)
         return Report(
             findings = findings,
             uidPowerEstimates = RootBatteryStatsParser.parseUidPowerEstimates(chargedOutput)
