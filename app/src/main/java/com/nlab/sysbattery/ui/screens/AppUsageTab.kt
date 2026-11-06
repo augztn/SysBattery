@@ -568,11 +568,12 @@ fun AppUsageTab(
     }
 }
 private fun standbyBucketLabel(bucket: Int): String = when (bucket) {
-    5 -> "Active"
-    10 -> "Working set"
-    20 -> "Frequent"
-    30 -> "Rare"
-    40 -> "Restricted"
+    10 -> "Active"
+    20 -> "Working set"
+    30 -> "Frequent"
+    40 -> "Rare"
+    45 -> "Restricted"
+    50 -> "Never"
     else -> "Unknown ($bucket)"
 }
 
