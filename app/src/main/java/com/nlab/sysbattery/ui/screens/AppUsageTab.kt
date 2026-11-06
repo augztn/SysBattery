@@ -315,7 +315,7 @@ fun AppUsageTab(
                 val componentPower = batteryStatsFindings
                     .filter { it.label == "Component estimate (mAh)" }
                     .mapNotNull { finding ->
-                        Regex("""^([a-z_ ]+):\\s*([0-9]+(?:\\.[0-9]+)?)""", RegexOption.IGNORE_CASE)
+                        Regex("""^([a-z_ ]+):\s*([0-9]+(?:\.[0-9]+)?)""", RegexOption.IGNORE_CASE)
                             .find(finding.value)
                             ?.let { match ->
                                 val mah = match.groupValues[2].toDoubleOrNull() ?: return@let null
